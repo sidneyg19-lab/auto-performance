@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 
 import { Activity, ArrowDownRight, ArrowUpRight, BadgeCheck, BarChart3, Boxes, CalendarDays, CarFront, ChevronDown, CircleDollarSign, ClipboardList, Download, Flame, Gauge, LayoutDashboard, Menu, Package, Plus, Search, Settings2, ShoppingCart, Target, Trash2, Truck, Users, Wallet, Wrench, X } from 'lucide-react'
 
@@ -66,7 +66,7 @@ const config: Record<string, { title: string; subtitle: string; fields: { key: s
 
   suppliers: { title: 'Fornecedores', subtitle: 'Parceiros e fornecedores cadastrados', fields: [{ key: 'name', label: 'Razão social / nome', required: true }, { key: 'phone', label: 'Telefone' }, { key: 'document', label: 'CNPJ' }, { key: 'email', label: 'E-mail', type: 'email' }] },
 
-  quotes: { title: 'Orçamentos', subtitle: 'Propostas com cliente, veículo e um item de produto ou serviço', fields: [{ key: 'customer_id', label: 'Cliente', required: true }, { key: 'vehicle_id', label: 'Veículo' }, { key: 'item_type', label: 'Tipo de item' }, { key: 'item_id', label: 'Produto / Serviço' }, { key: 'quantity', label: 'Quantidade', type: 'number' }, { key: 'unit_price', label: 'Preço unitário (R$)', type: 'number' }, { key: 'discount', label: 'Desconto (R$)', type: 'number' }, { key: 'status', label: 'Situação' }, { key: 'notes', label: 'Observações' }] },
+  quotes: { title: 'Orçamentos', subtitle: 'Propostas com vários itens, aprovação, PDF e WhatsApp', fields: [{ key: 'customer_id', label: 'Cliente', required: true }, { key: 'vehicle_id', label: 'Veículo' }, { key: 'item_type', label: 'Tipo de item' }, { key: 'item_id', label: 'Produto / Serviço' }, { key: 'quantity', label: 'Quantidade', type: 'number' }, { key: 'unit_price', label: 'Preço unitário (R$)', type: 'number' }, { key: 'discount', label: 'Desconto (R$)', type: 'number' }, { key: 'status', label: 'Situação' }, { key: 'notes', label: 'Observações' }] },
 
   work_orders: { title: 'Ordens de serviço', subtitle: 'Execução vinculada a cliente, veículo e orçamento aprovado', fields: [{ key: 'customer_id', label: 'Cliente', required: true }, { key: 'vehicle_id', label: 'Veículo' }, { key: 'quote_id', label: 'Orçamento aprovado' }, { key: 'technician', label: 'Técnico responsável' }, { key: 'status', label: 'Situação' }, { key: 'notes', label: 'Serviço solicitado / observações' }] },
 
@@ -83,6 +83,7 @@ const config: Record<string, { title: string; subtitle: string; fields: { key: s
 const currency = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0)
 
 const number = (v: string | number | undefined) => Number(v || 0)
+const statusLabel = (value: string) => ({ draft:'Rascunho', sent:'Enviado', approved:'Aprovado', rejected:'Rejeitado', expired:'Expirado', converted:'Convertido', waiting:'Aguardando', in_progress:'Em andamento', finished:'Concluída', delivered:'Entregue', completed:'Concluída', cancelled:'Cancelada', pending:'Pendente', paid:'Pago' } as Record<string,string>)[value] || value
 const cashTypeLabel = (kind: string) => kind === 'income' ? 'Entrada' : kind === 'expense' ? 'Saída' : kind
 const isAutomaticCash = (row: RecordItem) => (Boolean(row.source_type) || Boolean(row.source_id) || (Boolean(row.category) && String(row.category) !== 'avulso') || /^Recebimento de venda/i.test(String(row.description || '')))
 
@@ -113,12 +114,18 @@ function App() {
 
 
   const [saleDetails, setSaleDetails] = useState<RecordItem | null>(null)
-  const [installmentDetails, setInstallmentDetails] = useState<Record<string, {installments:number;rate_percent:number;base_amount:number;fee_amount:number;total_amount:number}>>({})
+  const [installmentDetails, setInstallmentDetails] = useState<Record<string, {installments:number;rate_percent:number;base_amount:number;fee_amount:number;total_amount:number;card_brand?:string|null;payment_method?:string|null}>>({})
   const [trackedSales, setTrackedSales] = useState<string[]>([])
   const [saleItemRows, setSaleItemRows] = useState<{sale_id:string;item_type:string;product_id:string|null;service_id:string|null;quantity:number;unit_price:number;unit_cost:number}[]>([])
   const [stockLocations, setStockLocations] = useState<{id:string;name:string}[]>([])
   const [stockBalances, setStockBalances] = useState<{location_id:string;product_id:string;quantity:number}[]>([])
   const [stockError, setStockError] = useState('')
+  const [quoteItems, setQuoteItems] = useState<{type:'product'|'service';id:string;quantity:number;price:number}[]>([])
+  const [paySale, setPaySale] = useState<RecordItem | null>(null)
+  const [payMethod, setPayMethod] = useState('pix')
+  const [payBrand, setPayBrand] = useState('')
+  const [payInstallments, setPayInstallments] = useState('1')
+  const [payLocations, setPayLocations] = useState<Record<string,string>>({})
   const [saleItems, setSaleItems] = useState<{type:'product'|'service';id:string;quantity:number;location_id?:string}[]>([])
   const [pickType, setPickType] = useState<'product'|'service'>('product')
   const [pickId, setPickId] = useState('')
@@ -216,14 +223,14 @@ function App() {
       setOrgId(membership.organization_id)
       const [ratesResult, installmentResult] = await Promise.all([
         supabase.from('ap_card_rates').select('installments,rate_percent').eq('organization_id',membership.organization_id),
-        supabase.from('ap_sale_installments').select('sale_id,installments,rate_percent,base_amount,fee_amount,total_amount').eq('organization_id',membership.organization_id)
+        supabase.from('ap_sale_installments').select('sale_id,installments,rate_percent,base_amount,fee_amount,total_amount,card_brand,payment_method').eq('organization_id',membership.organization_id)
       ])
       if (!active) return
       if (ratesResult.error || installmentResult.error) {
         setFinanceErrors(old=>({...old,sales:'Configuracao de cartao indisponivel: '+(ratesResult.error?.message || installmentResult.error?.message)}))
       } else {
         setCardRates(Object.fromEntries((ratesResult.data||[]).map(r=>[r.installments,Number(r.rate_percent)])))
-        setInstallmentDetails(Object.fromEntries((installmentResult.data||[]).map(r=>[r.sale_id,{installments:Number(r.installments),rate_percent:Number(r.rate_percent),base_amount:Number(r.base_amount),fee_amount:Number(r.fee_amount),total_amount:Number(r.total_amount)}])))
+        setInstallmentDetails(Object.fromEntries((installmentResult.data||[]).map(r=>[r.sale_id,{installments:Number(r.installments),rate_percent:Number(r.rate_percent),base_amount:Number(r.base_amount),fee_amount:Number(r.fee_amount),total_amount:Number(r.total_amount),card_brand:r.card_brand,payment_method:r.payment_method}])))
       }
       setRole(membership.role || '')
       const admin = membership.role === 'owner' || membership.role === 'admin'
@@ -261,7 +268,7 @@ function App() {
           const items = (itemsR.data || []).filter(i => i.sale_id === s.id)
           const item = items[0]
           const payment = (paymentsR.data || []).find(p => p.sale_id === s.id)
-          return { id: s.id, status:s.status||'completed', description: (items.length>1 ? `${items.length} itens · ${item?.description || 'Venda'}` : item?.description || 'Venda') + (Number((installmentResult.data||[]).find(x=>x.sale_id===s.id)?.installments||1)>1 ? ` · ${(installmentResult.data||[]).find(x=>x.sale_id===s.id)?.installments}x no crédito` : ''), customer_id: s.customer_id || '', vehicle_id: s.vehicle_id || '', amount: Number(s.total ?? payment?.amount ?? 0), cost: items.reduce((sum,i)=>sum+Number(i.unit_cost||0)*Number(i.quantity||1),0), method: payment?.method || '', date: String(payment?.paid_at || s.created_at || '').slice(0, 10), installments: Number((installmentResult.data||[]).find(x=>x.sale_id===s.id)?.installments||1), created_at: s.created_at || '' } as RecordItem
+          return { id: s.id, work_order_id:s.work_order_id||'', status:s.status||'completed', description: (items.length>1 ? `${items.length} itens · ${item?.description || 'Venda'}` : item?.description || 'Venda') + (Number((installmentResult.data||[]).find(x=>x.sale_id===s.id)?.installments||1)>1 ? ` · ${(installmentResult.data||[]).find(x=>x.sale_id===s.id)?.installments}x no crédito` : ''), customer_id: s.customer_id || '', vehicle_id: s.vehicle_id || '', amount: Number(s.total ?? payment?.amount ?? 0), cost: items.reduce((sum,i)=>sum+Number(i.unit_cost||0)*Number(i.quantity||1),0), method: payment?.method || '', date: String(payment?.paid_at || s.created_at || '').slice(0, 10), installments: Number((installmentResult.data||[]).find(x=>x.sale_id===s.id)?.installments||1), created_at: s.created_at || '' } as RecordItem
         })
         setData(old => ({ ...old, sales: mapped }))
       }
@@ -287,7 +294,7 @@ function App() {
         const items = (itemResult.data || []).filter(i => i.quote_id === q.id)
         const item = items[0]
         const amount = items.reduce((total, i) => total + Number(i.quantity || 1) * Number(i.unit_price || 0), 0) - Number(q.discount || 0)
-        return { id: q.id, customer_id: q.customer_id || '', vehicle_id: q.vehicle_id || '', status: q.status || 'open', discount: Number(q.discount || 0), notes: q.notes || '', item_type: item?.item_type || (item?.product_id ? 'product' : item?.service_id ? 'service' : ''), item_id: item?.product_id || item?.service_id || '', quantity: Number(item?.quantity || 1), unit_price: Number(item?.unit_price || 0), amount: Math.max(0, amount), item_count: items.length, item_row_id: item?.id || '', created_at: q.created_at || '' } as RecordItem
+        return { id: q.id, customer_id: q.customer_id || '', vehicle_id: q.vehicle_id || '', status: q.status || 'draft', discount: Number(q.discount || 0), notes: q.notes || '', item_type: item?.item_type || (item?.product_id ? 'product' : item?.service_id ? 'service' : ''), item_id: item?.product_id || item?.service_id || '', quantity: Number(item?.quantity || 1), unit_price: Number(item?.unit_price || 0), amount: Math.max(0, amount), items: JSON.stringify(items.map(i=>({type:i.item_type,id:i.product_id||i.service_id,quantity:Number(i.quantity),price:Number(i.unit_price)}))), item_count: items.length, item_row_id: item?.id || '', created_at: q.created_at || '' } as RecordItem
       }) }))
       if (osResult.error) setOperationErrors(old => ({ ...old, work_orders: osResult.error!.message }))
       else setData(old => ({ ...old, work_orders: (osResult.data || []).map(o => ({ id: o.id, customer_id: o.customer_id || '', vehicle_id: o.vehicle_id || '', quote_id: o.quote_id || '', status: o.status || 'waiting', technician: o.technician || '', notes: o.notes || '', started_at: o.started_at || '', finished_at: o.finished_at || '', created_at: o.created_at || '' })) }))
@@ -445,11 +452,173 @@ function App() {
   function navigate(p: string) { if (!can(p)) return; setPage(p); setSearch(''); setSidebar(false) }
 
   const [warrantyOrder, setWarrantyOrder] = useState<RecordItem | null>(null)
-  const [celebrate, setCelebrate] = useState(false)
+  const [celebrate] = useState(false)
 
-  function openNew() { if (!can(page, 'create')) return; setSaleItems([]); setPickId(''); setPickLocation(''); setPickQty('1'); setEditing(null); setForm(page === 'quotes' ? { status: 'open', item_type: 'service', quantity: '1' } : page === 'work_orders' ? { status: 'waiting' } : page === 'sales' ? { date: today(), method: 'pix', installments: '1', customer_mode: 'existing', vehicle_mode: 'none' } : page === 'expenses' ? { date: today(), status: 'paid', payment_method: 'pix' } : page === 'cash_entries' ? { date: today(), kind: 'income' } : page === 'goals' ? { month: today().slice(0, 7) } : {}); setModal(true) }
+  async function approveQuote(r:RecordItem){
+    if(!orgId||!window.confirm('Cliente aprovou o orçamento? Gerar OS agora?'))return
+    const {data:id,error}=await supabase.rpc('ap_approve_quote_create_os',{p_org:orgId,p_quote:r.id})
+    if(error){alert(error.message);return}
+    const {data:os,error:readError}=await supabase.from('work_orders').select('*').eq('id',id).eq('organization_id',orgId).single()
+    if(readError||!os){alert(readError?.message||'OS não localizada');return}
+    const row:RecordItem={...os,id:os.id,customer_id:os.customer_id||'',vehicle_id:os.vehicle_id||'',quote_id:os.quote_id||''}
+    setData(old=>({...old,quotes:old.quotes.map(q=>q.id===r.id?{...q,status:'approved'}:q),work_orders:[row,...old.work_orders.filter(x=>x.id!==id)]}))
+    setPage('work_orders');setSearch('');setEditing(id);setForm(Object.fromEntries(Object.entries(row).map(([k,v])=>[k,String(v??'')])));setModal(true)
+  }
+  async function finishOs(r:RecordItem){
+    if(!orgId||!window.confirm('Concluir a OS e preparar a venda pendente?'))return
+    const {error}=await supabase.rpc('ap_finish_os_prepare_sale',{p_org:orgId,p_os:r.id})
+    if(error){alert(error.message);return}
+    setData(old=>({...old,work_orders:old.work_orders.map(o=>o.id===r.id?{...o,status:'finished'}:o)}))
+    await refreshAfterSale(orgId);setPage('sales');setSearch('');alert('Venda pendente criada. Clique em Receber quando o cliente pagar.')
+  }
+  async function deliverOs(r:RecordItem){
+    if(!orgId||!window.confirm('Confirmar entrega do veículo e disponibilizar garantia?'))return
+    const {error}=await supabase.rpc('ap_deliver_os',{p_org:orgId,p_os:r.id})
+    if(error){alert(error.message);return}
+    const row={...r,status:'delivered'}
+    setData(old=>({...old,work_orders:old.work_orders.map(o=>o.id===r.id?row:o)}))
+    setWarrantyOrder(row)
+  }
+  async function cancelOsSale(r:RecordItem){
+    if(!orgId||!window.confirm('Cancelar esta venda pendente?'))return
+    const {error}=await supabase.rpc('ap_cancel_os_sale',{p_org:orgId,p_sale:r.id})
+    if(error){alert(error.message);return}await refreshAfterSale(orgId)
+  }
+  async function confirmOsPayment(){
+    if(!orgId||!paySale)return
+    const products=saleItemRows.filter(i=>i.sale_id===paySale.id&&i.item_type==='product')
+    if(products.some(i=>!payLocations[String(i.product_id)])){alert('Selecione o estoque de origem de cada produto.');return}
+    setSaving(true)
+    const {error}=await supabase.rpc('ap_pay_os_sale',{p_org:orgId,p_sale:paySale.id,p_method:payMethod,p_installments:payMethod==='credit'?Number(payInstallments):1,p_brand:['credit','debit'].includes(payMethod)?payBrand:null,p_locations:payLocations})
+    setSaving(false)
+    if(error){alert('Pagamento não realizado: '+error.message);return}
+    setPaySale(null);await refreshAfterSale(orgId);alert('Pagamento confirmado, caixa e estoque atualizados.')
+  }
+  function quoteHtml(r:RecordItem){
+    const customer=data.customers.find(c=>c.id===r.customer_id)
+    const vehicle=data.vehicles.find(v=>v.id===r.vehicle_id)
+    const esc=(v:unknown)=>String(v??'').replace(/[&<>"']/g,ch=>(({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' } as Record<string,string>)[ch]||ch))
+    const items=JSON.parse(String(r.items||'[]')) as {type:'product'|'service';id:string;quantity:number;price:number}[]
+    return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Orçamento ${esc(r.id.slice(0,8))}</title><style>body{font:14px Arial,sans-serif;margin:35px;color:#202a38}h1{color:#263c74}table{width:100%;border-collapse:collapse;margin:25px 0}td,th{padding:10px;border:1px solid #ccd3e0;text-align:left}th{background:#eef2fa}.total{text-align:right;font-size:20px}</style></head><body><h1>${esc(shopName)} — Orçamento</h1><p>Número: ${esc(r.id.slice(0,8))} · Emissão: ${new Date().toLocaleDateString('pt-BR')}</p><p>Cliente: ${esc(customer?.name||'Não informado')} · Veículo: ${esc(vehicle?.plate||'Não informado')}</p><table><tr><th>Descrição</th><th>Qtd.</th><th>Unitário</th><th>Total</th></tr>${items.map(i=>`<tr><td>${esc((i.type==='product'?data.products:data.services).find(x=>x.id===i.id)?.name||'Item')}</td><td>${i.quantity}</td><td>${currency(i.price)}</td><td>${currency(i.price*i.quantity)}</td></tr>`).join('')}</table><p>Desconto: ${currency(Number(r.discount||0))}</p><p class="total"><b>Total: ${currency(Number(r.amount||0))}</b></p><p>${esc(r.notes||'')}</p><p>Proposta sujeita à aprovação do cliente. Não substitui nota fiscal.</p></body></html>`
+  }
+  function printQuote(r:RecordItem){const popup=window.open('','_blank');if(!popup){alert('Permita pop-ups para salvar PDF');return}popup.document.write(quoteHtml(r));popup.document.close();popup.focus();popup.print()}
+  // Gera um PDF real a partir de canvas, preservando acentos sem bibliotecas externas.
+  // Cada página é uma imagem JPEG dentro de um PDF A4 válido.
+  function quotePdf(r:RecordItem):Blob {
+    const customer=data.customers.find(c=>c.id===r.customer_id)
+    const vehicle=data.vehicles.find(v=>v.id===r.vehicle_id)
+    const items=JSON.parse(String(r.items||'[]')) as {type:'product'|'service';id:string;quantity:number;price:number}[]
+    const width=1240, height=1754, margin=76, right=width-margin
+    const pages:Uint8Array[]=[]
+    const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height
+    const ctx = canvas.getContext('2d')!
+if (!ctx) throw new Error('Canvas indisponível')
+    const pdfCtx: CanvasRenderingContext2D = ctx
+let y = 0
+    function textLine(value:string,x:number,yy:number,size=25,bold=false,color='#202a38'){
+      pdfCtx.fillStyle=color;pdfCtx.font=`${bold?'bold ':''}${size}px Arial, sans-serif`;pdfCtx.fillText(value,x,yy)
+    }
+    function wrap(value:string,maxWidth:number,size=24,bold=false):string[]{
+      ctx.font=`${bold?'bold ':''}${size}px Arial, sans-serif`
+      const result:string[]=[]
+      for(const paragraph of String(value).split('\n')){
+        let line=''
+        for(const word of paragraph.split(/\s+/)){
+          const next=line?`${line} ${word}`:word
+          if(ctx.measureText(next).width>maxWidth&&line){result.push(line);line=word}else line=next
+        }
+        result.push(line)
+      }
+      return result
+    }
+    function addPage(){
+      ctx.fillStyle='#ffffff';ctx.fillRect(0,0,width,height)
+      ctx.fillStyle='#263c74';ctx.fillRect(0,0,width,12)
+      y=104
+      textLine(`${shopName} — Orçamento`,margin,y,37,true,'#263c74');y+=58
+      textLine(`Nº ${r.id.slice(0,8)}  •  Emissão: ${new Date(r.created_at||Date.now()).toLocaleDateString('pt-BR')}`,margin,y,23);y+=44
+      for(const line of wrap(`Cliente: ${customer?.name||'Não informado'}  •  Veículo: ${vehicle?.plate||'Não informado'}`,right-margin,23)){textLine(line,margin,y,23);y+=34}
+      y+=30
+      ctx.fillStyle='#eef2fa';ctx.fillRect(margin,y,right-margin,53)
+      textLine('Descrição',margin+12,y+35,23,true);textLine('Qtd.',730,y+35,23,true);textLine('Unitário',842,y+35,23,true);textLine('Total',1054,y+35,23,true)
+      y+=53
+    }
+    function finishPage(){
+      const jpeg=canvas.toDataURL('image/jpeg',0.9).split(',')[1]
+      const binary=atob(jpeg), bytes=new Uint8Array(binary.length)
+      for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i)
+      pages.push(bytes)
+    }
+    addPage()
+    for(const item of items){
+      const name=(item.type==='product'?data.products:data.services).find(x=>x.id===item.id)?.name||'Item'
+      const lines=wrap(String(name),600,23)
+      const rowHeight=Math.max(57,lines.length*32+24)
+      if(y+rowHeight>height-270){finishPage();addPage()}
+      ctx.strokeStyle='#ccd3e0';ctx.strokeRect(margin,y,right-margin,rowHeight)
+      lines.forEach((line,i)=>textLine(line,margin+12,y+35+i*32,23))
+      textLine(String(item.quantity),730,y+35,23)
+      textLine(currency(item.price),842,y+35,23)
+      textLine(currency(item.price*item.quantity),1054,y+35,23)
+      y+=rowHeight
+    }
+    if(y>height-350){finishPage();addPage()}
+    y+=55;textLine(`Desconto: ${currency(Number(r.discount||0))}`,margin,y,24);y+=54
+    textLine(`Total: ${currency(Number(r.amount||0))}`,right-440,y,32,true,'#263c74');y+=60
+    for(const line of wrap(String(r.notes||''),right-margin,23)){if(y>height-140){finishPage();addPage()}textLine(line,margin,y,23);y+=35}
+    y+=30
+    textLine('Proposta sujeita à aprovação do cliente. Não substitui nota fiscal.',margin,y,21)
+    finishPage()
+    // PDF A4 com imagens JPEG embutidas e tabela de referências cruzadas.
+    const encoder=new TextEncoder(), chunks:Uint8Array[]=[], offsets:number[]=[0]
+    let position=0
+    function put(value:string|Uint8Array){const bytes=typeof value==='string'?encoder.encode(value):value;chunks.push(bytes);position+=bytes.length}
+    function object(id:number,body:string){offsets[id]=position;put(`${id} 0 obj\n${body}\nendobj\n`)}
+    put('%PDF-1.4\n')
+    const kids=pages.map((_,i)=>`${3+i*3} 0 R`).join(' ')
+    object(1,'<< /Type /Catalog /Pages 2 0 R >>')
+    object(2,`<< /Type /Pages /Kids [${kids}] /Count ${pages.length} >>`)
+    pages.forEach((jpeg,i)=>{
+      const pageId=3+i*3,imgId=pageId+1,contentId=pageId+2
+      object(pageId,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /XObject << /Im${i} ${imgId} 0 R >> >> /Contents ${contentId} 0 R >>`)
+      offsets[imgId]=position
+      put(`${imgId} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`)
+      put(jpeg);put('\nendstream\nendobj\n')
+      const content=`q 595.28 0 0 841.89 0 0 cm /Im${i} Do Q`
+      object(contentId,`<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream`)
+    })
+    const start=position, count=3+pages.length*3
+    put(`xref\n0 ${count}\n0000000000 65535 f \n`)
+    for(let id=1;id<count;id++)put(`${String(offsets[id]).padStart(10,'0')} 00000 n \n`)
+    put(`trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF`)
+    return new Blob(chunks as BlobPart[],{type:'application/pdf'})
+  }
+  async function shareQuote(r:RecordItem){
+    const customer=data.customers.find(c=>c.id===r.customer_id)
+    const phone=String(customer?.phone||'').replace(/\D/g,'')
+    const message=`Olá, ${customer?.name||''}! Segue o orçamento ${r.id.slice(0,8)} da ${shopName}, no valor de ${currency(Number(r.amount||0))}. Podemos prosseguir com sua aprovação?`
+    const filename=`orcamento-${r.id.slice(0,8)}.pdf`
+    // Abrir imediatamente durante o clique evita bloqueadores de pop-up após await.
+    const whatsapp=window.open('about:blank','_blank')
+    try{
+      const blob=quotePdf(r),file=new File([blob],filename,{type:'application/pdf'})
+      if(navigator.share&&navigator.canShare?.({files:[file]})){
+        whatsapp?.close()
+        try{await navigator.share({files:[file],title:`Orçamento ${r.id.slice(0,8)}`,text:message});return}
+        catch(error){if((error as Error)?.name==='AbortError')return}
+      }
+      const url=URL.createObjectURL(blob),link=document.createElement('a')
+      link.href=url;link.download=filename;document.body.appendChild(link);link.click();link.remove()
+      setTimeout(()=>URL.revokeObjectURL(url),60000)
+      const target=`https://wa.me/${phone}?text=${encodeURIComponent(message)}`
+      if(whatsapp)whatsapp.location.href=target
+      else window.open(target,'_blank')
+      alert(`O PDF ${filename} foi baixado. No WhatsApp, clique no clipe (Anexar) e selecione esse arquivo na pasta Downloads.`)
+    }catch(error){whatsapp?.close();alert(`Não foi possível preparar o PDF: ${error instanceof Error?error.message:String(error)}`)}
+  }
+  function openNew() { if (!can(page, 'create')) return; setQuoteItems([]); setSaleItems([]); setPickId(''); setPickLocation(''); setPickQty('1'); setEditing(null); setForm(page === 'quotes' ? { status: 'draft', item_type: 'service', quantity: '1' } : page === 'work_orders' ? { status: 'waiting' } : page === 'sales' ? { date: today(), method: 'pix', installments: '1', card_brand: '', customer_mode: 'existing', vehicle_mode: 'none' } : page === 'expenses' ? { date: today(), status: 'paid', payment_method: 'pix' } : page === 'cash_entries' ? { date: today(), kind: 'income' } : page === 'goals' ? { month: today().slice(0, 7) } : {}); setModal(true) }
 
-  function openEdit(row: RecordItem) { if (!can(page, 'edit')) return; if(page==='products') { alert('Para alterar quantidades, use Controle de estoque. Os demais dados do produto podem ser editados.'); } setEditing(row.id); setForm(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v)]))); setModal(true) }
+  function openEdit(row: RecordItem) { if (!can(page, 'edit')) return; if (page === 'quotes' && !['draft', 'sent'].includes(String(row.status))) { alert('Orçamentos aprovados ou encerrados são somente para consulta.'); return }; if (page === 'work_orders' && !['waiting', 'in_progress'].includes(String(row.status))) { alert('OS concluídas ou entregues não podem ser editadas diretamente.'); return }; if (page === 'sales' && (row.status !== 'draft' || Boolean(row.work_order_id))) { alert('Esta venda não pode ser editada diretamente. Utilize as ações próprias de recebimento ou cancelamento.'); return }; if(page==='quotes') {try{setQuoteItems(JSON.parse(String(row.items||'[]')))}catch{setQuoteItems([])}}; if(page==='products') { alert('Para alterar quantidades, use Controle de estoque. Os demais dados do produto podem ser editados.'); } setEditing(row.id); setForm(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v)]))); setModal(true) }
 
   // Atualiza as colecoes afetadas pela venda sem desmontar a aplicacao nem perder a pagina atual.
   async function refreshAfterSale(organizationId: string) {
@@ -457,7 +626,7 @@ function App() {
       supabase.from('sales').select('*').eq('organization_id', organizationId),
       supabase.from('sale_items').select('*').eq('organization_id', organizationId),
       supabase.from('payments').select('*').eq('organization_id', organizationId),
-      supabase.from('ap_sale_installments').select('sale_id,installments,rate_percent,base_amount,fee_amount,total_amount').eq('organization_id', organizationId),
+      supabase.from('ap_sale_installments').select('sale_id,installments,rate_percent,base_amount,fee_amount,total_amount,card_brand,payment_method').eq('organization_id', organizationId),
       supabase.from('customers').select('id,name,phone,email,document,notes,created_at').eq('organization_id', organizationId),
       supabase.from('vehicles').select('id,customer_id,plate,brand,model,model_year,color,notes,created_at').eq('organization_id', organizationId),
       supabase.from('ap_item_sales').select('sale_id').eq('organization_id', organizationId),
@@ -476,7 +645,7 @@ function App() {
       const count = Number(installment?.installments || 1)
       const description = items.length > 1 ? `${items.length} itens · ${items[0]?.description || 'Venda'}` : items[0]?.description || 'Venda'
       return {
-        id: sale.id, status: sale.status || 'completed',
+        id: sale.id, work_order_id:sale.work_order_id||'', status: sale.status || 'completed',
         description: description + (count > 1 ? ` · ${count}x no crédito` : ''),
         customer_id: sale.customer_id || '', vehicle_id: sale.vehicle_id || '',
         amount: Number(sale.total ?? payment?.amount ?? 0),
@@ -486,7 +655,7 @@ function App() {
       }
     })
     setSaleItemRows(itemsR.data || [])
-    setInstallmentDetails(Object.fromEntries((installmentsR.data || []).map(r=>[r.sale_id,{installments:Number(r.installments),rate_percent:Number(r.rate_percent),base_amount:Number(r.base_amount),fee_amount:Number(r.fee_amount),total_amount:Number(r.total_amount)}])))
+    setInstallmentDetails(Object.fromEntries((installmentsR.data || []).map(r=>[r.sale_id,{installments:Number(r.installments),rate_percent:Number(r.rate_percent),base_amount:Number(r.base_amount),fee_amount:Number(r.fee_amount),total_amount:Number(r.total_amount),card_brand:r.card_brand,payment_method:r.payment_method}])))
     setTrackedSales((trackedR.data || []).map(row => row.sale_id))
     setStockBalances(balancesR.data || [])
     setData(old => ({
@@ -501,6 +670,10 @@ function App() {
 
   async function save() {
     if (!can(page, editing ? 'edit' : 'create')) { alert('Ação não autorizada.'); return }
+    if (editing && page === 'quotes' && !['draft','sent'].includes(String(data.quotes.find(q => q.id === editing)?.status))) { alert('Orçamento protegido contra edição.'); return }
+    if (editing && page === 'work_orders' && !['waiting','in_progress'].includes(String(data.work_orders.find(o => o.id === editing)?.status))) { alert('OS protegida contra edição direta.'); return }
+    if (editing && page === 'sales' && (data.sales.find(s => s.id === editing)?.status !== 'draft' || Boolean(data.sales.find(s => s.id === editing)?.work_order_id))) { alert('Venda protegida contra edição direta.'); return }
+    if (page === 'sales' && editing && data.sales.some(s => s.id === editing && s.status === 'cancelled')) { alert('Não é permitido alterar uma venda cancelada.'); return }
 
     const fields = config[page]?.fields || []
 
@@ -513,7 +686,8 @@ function App() {
       if (form.vehicle_mode === 'new' && (!form.new_vehicle_plate?.trim() || !form.new_vehicle_model?.trim())) { alert('Informe placa e modelo do novo veículo.'); return }
       if (form.vehicle_mode === 'existing' && form.vehicle_id && !data.vehicles.some(v => v.id === form.vehicle_id && (!v.customer_id || v.customer_id === form.customer_id))) { alert('Veículo inválido para o cliente.'); return }
       if (!['pix', 'cash', 'debit', 'credit'].includes(form.method || '')) { alert('Selecione uma forma de pagamento válida.'); return }
-      if (form.method === 'credit' && (!Number.isInteger(Number(form.installments)) || Number(form.installments) < 1 || Number(form.installments) > 12)) { alert('Selecione de 1 a 12 parcelas.'); return }
+      if (['credit','debit'].includes(form.method) && !['visa','mastercard','elo','amex','other'].includes(form.card_brand || '')) { alert('Selecione a bandeira do cartão.'); return }
+      if (form.method === 'credit' && (!Number.isInteger(Number(form.installments)) || Number(form.installments) < 1 || Number(form.installments) > 18)) { alert('Selecione de 1 a 18 parcelas.'); return }
     }
 
     if (page === 'customers') {
@@ -602,10 +776,21 @@ function App() {
       if (form.vehicle_id && !data.vehicles.some(v => v.id === form.vehicle_id && (!v.customer_id || v.customer_id === form.customer_id))) { alert('O veículo precisa pertencer ao cliente selecionado.'); return }
       if (page === 'work_orders') {
         const quote = data.quotes.find(q => q.id === form.quote_id)
-        if (form.quote_id && (!quote || quote.status !== 'approved' || quote.customer_id !== form.customer_id)) { alert('Escolha um orçamento aprovado do mesmo cliente.'); return }
+        if (form.quote_id && (!quote || quote.status !== 'approved' || quote.customer_id !== form.customer_id)) { alert('Selecione um orçamento aprovado deste cliente.'); return }
+        if (form.status === 'delivered') { alert('Use o botão Entregar após confirmar o pagamento.');return }
+        if (form.status === 'finished') {
+          if (!editing) { alert('Salve a OS antes de concluir.'); return }
+          setSaving(true)
+          const { error } = await supabase.rpc('ap_finish_os_prepare_sale',{p_org:orgId,p_os:editing})
+          setSaving(false)
+          if(error){alert('Erro ao concluir OS: '+error.message);return}
+          setData(old=>({...old,work_orders:old.work_orders.map(o=>o.id===editing?{...o,status:'finished',finished_at:new Date().toISOString()}:o)}))
+          setModal(false); await refreshAfterSale(orgId); setPage('sales');setSearch('')
+          alert('OS concluída. Venda pendente criada. Confirme o pagamento na tela de vendas.');return
+        }
         const payload = { customer_id: form.customer_id, vehicle_id: form.vehicle_id || null, quote_id: form.quote_id || null, technician: form.technician?.trim() || null, status: form.status || 'waiting', notes: form.notes?.trim() || null,
           started_at: form.status === 'in_progress' ? (editing ? (data.work_orders.find(o => o.id === editing)?.started_at || new Date().toISOString()) : new Date().toISOString()) : (editing ? data.work_orders.find(o => o.id === editing)?.started_at || null : null),
-          finished_at: form.status === 'finished' ? new Date().toISOString() : null }
+          finished_at: editing ? data.work_orders.find(o => o.id === editing)?.finished_at || null : null }
         setSaving(true)
         const query = editing ? supabase.from('work_orders').update(payload).eq('id', editing).eq('organization_id', orgId) : supabase.from('work_orders').insert({ ...payload, organization_id: orgId })
         const { data: saved, error } = await query.select('*').single()
@@ -613,46 +798,25 @@ function App() {
         if (error || !saved) { alert('Erro ao salvar OS: ' + (error?.message || 'sem retorno')); return }
         const row: RecordItem = { id: saved.id, customer_id: saved.customer_id || '', vehicle_id: saved.vehicle_id || '', quote_id: saved.quote_id || '', technician: saved.technician || '', status: saved.status || '', notes: saved.notes || '', started_at: saved.started_at || '', finished_at: saved.finished_at || '', created_at: saved.created_at || '' }
         setData(old => ({ ...old, work_orders: editing ? old.work_orders.map(o => o.id === editing ? row : o) : [row, ...old.work_orders] }))
-        setModal(false)
-        if (saved.status === 'finished' && (!editing || data.work_orders.find(o => o.id === editing)?.status !== 'finished')) {
-          setCelebrate(true)
-          window.setTimeout(() => setCelebrate(false), 2600)
-          setWarrantyOrder(row)
-        }
-        return
+        setModal(false);return
       }
-      const oldQuote = editing ? data.quotes.find(q => q.id === editing) : null
-      if (editing && data.work_orders.some(o => o.quote_id === editing)) { alert('Orçamento vinculado a uma OS: edição bloqueada nesta fase.'); return }
-      if (form.status === 'approved' && !form.item_id) { alert('Adicione um produto ou serviço antes de aprovar o orçamento.'); return }
-      if (oldQuote && Number(oldQuote.item_count || 0) > 1) { alert('Este orçamento tem múltiplos itens. A edição de itens ficará disponível na próxima atualização.'); return }
-      if (form.item_id && ![...data.products, ...data.services].some(i => i.id === form.item_id)) { alert('Selecione um item válido.'); return }
-      if (form.item_id && (!Number.isFinite(Number(form.quantity)) || Number(form.quantity) <= 0 || Number(form.unit_price) < 0)) { alert('Informe quantidade e preço válidos.'); return }
-      const discount = Number(form.discount || 0)
-      if (!Number.isFinite(discount) || discount < 0) { alert('Desconto inválido.'); return }
-      const payload = { customer_id: form.customer_id, vehicle_id: form.vehicle_id || null, status: form.status || 'open', discount, notes: form.notes?.trim() || null }
+      if (editing && data.work_orders.some(o => o.quote_id === editing)) { alert('Orçamento vinculado a OS não pode ser editado.'); return }
+      if (!quoteItems.length) { alert('Adicione ao menos um produto ou serviço.'); return }
+      if (form.status === 'approved') { alert('Para aprovar, salve o orçamento e use Aprovar e gerar OS.'); return }
+      const discount=Number(form.discount||0)
+      if(!Number.isFinite(discount)||discount<0){alert('Desconto inválido.');return}
       setSaving(true)
-      const query = editing ? supabase.from('quotes').update(payload).eq('id', editing).eq('organization_id', orgId) : supabase.from('quotes').insert({ ...payload, organization_id: orgId })
-      const { data: saved, error } = await query.select('*').single()
-      if (error || !saved) { setSaving(false); alert('Erro ao salvar orçamento: ' + (error?.message || 'sem retorno')); return }
-      let itemRowId = String(oldQuote?.item_row_id || '')
-      if (form.item_id) {
-        const selected = (form.item_type === 'product' ? data.products : data.services).find(i => i.id === form.item_id)
-        if (!selected) { setSaving(false); alert('Produto ou serviço não encontrado.'); return }
-        const itemPayload = { item_type: form.item_type, product_id: form.item_type === 'product' ? form.item_id : null, service_id: form.item_type === 'service' ? form.item_id : null, description: String(selected.name || ''), quantity: Number(form.quantity || 1), unit_price: Number(form.unit_price || 0) }
-        const itemQuery = itemRowId ? supabase.from('quote_items').update(itemPayload).eq('id', itemRowId).eq('organization_id', orgId) : supabase.from('quote_items').insert({ ...itemPayload, organization_id: orgId, quote_id: saved.id })
-        const { data: item, error: itemError } = await itemQuery.select('id').single()
-        if (itemError || !item) { setSaving(false); alert('Orçamento salvo, mas houve erro ao salvar o item: ' + (itemError?.message || 'sem retorno') + '. Reabra e corrija antes de aprovar.'); return }
-        itemRowId = item.id
-      } else if (itemRowId) {
-        const { error: itemError } = await supabase.from('quote_items').delete().eq('id', itemRowId).eq('organization_id', orgId)
-        if (itemError) { setSaving(false); alert('Erro ao remover item: ' + itemError.message); return }
-        itemRowId = ''
-      }
+      const {data:quoteId,error}=await supabase.rpc('ap_save_quote',{
+        p_org:orgId,p_quote:editing||null,p_customer:form.customer_id,p_vehicle:form.vehicle_id||null,
+        p_discount:discount,p_notes:form.notes?.trim()||null,p_status:form.status||'draft',p_items:quoteItems
+      })
       setSaving(false)
-      const row: RecordItem = { id: saved.id, customer_id: saved.customer_id || '', vehicle_id: saved.vehicle_id || '', status: saved.status || 'open', notes: saved.notes || '', discount: Number(saved.discount || 0), item_type: form.item_type || '', item_id: form.item_id || '', quantity: Number(form.quantity || 1), unit_price: Number(form.unit_price || 0), amount: Math.max(0, (form.item_id ? Number(form.quantity || 1) * Number(form.unit_price || 0) : 0) - discount), item_count: itemRowId ? 1 : 0, item_row_id: itemRowId, created_at: saved.created_at || '' }
-      setData(old => ({ ...old, quotes: editing ? old.quotes.map(q => q.id === editing ? row : q) : [row, ...old.quotes] }))
-      setModal(false)
-      return
+      if(error||!quoteId){alert('Erro ao salvar orçamento: '+(error?.message||'sem retorno'));return}
+      const row:RecordItem={id:quoteId,customer_id:form.customer_id,vehicle_id:form.vehicle_id||'',status:form.status||'draft',notes:form.notes||'',discount,
+        item_type:quoteItems[0].type,item_id:quoteItems[0].id,quantity:quoteItems[0].quantity,unit_price:quoteItems[0].price,
+        amount:Math.max(0,quoteItems.reduce((n,i)=>n+i.quantity*i.price,0)-discount),item_count:quoteItems.length,items:JSON.stringify(quoteItems),created_at:new Date().toISOString()}
+      setData(old=>({...old,quotes:editing?old.quotes.map(q=>q.id===editing?row:q):[row,...old.quotes]}))
+      setModal(false);return
     }
     if (page === 'products' || page === 'services' || page === 'suppliers') {
       if (!orgId || catalogErrors[page]) { alert('Conexão com Supabase indisponível: ' + (catalogErrors[page] || 'empresa não encontrada')); return }
@@ -706,7 +870,8 @@ function App() {
               p_customer:form.customer_id || null,
               p_vehicle:form.vehicle_mode==='existing' ? form.vehicle_id || null : null,
               p_discount:Number(form.discount || 0),
-              p_installments:form.method==='credit'?Number(form.installments):1
+              p_installments:form.method==='credit'?Number(form.installments):1,
+              p_brand:['credit','debit'].includes(form.method)?form.card_brand:null
             })
             if (itemError) throw itemError
             setModal(false)
@@ -723,6 +888,7 @@ function App() {
             p_cost: Number(form.cost || 0),
             p_method: form.method,
             p_installments:form.method==='credit'?Number(form.installments):1,
+              p_brand:['credit','debit'].includes(form.method)?form.card_brand:null,
 p_date: form.date || today(),
             p_customer_id: form.customer_mode === 'new' ? null : form.customer_id || null,
             p_new_customer_name: form.customer_mode === 'new' ? form.new_customer_name?.trim() : null,
@@ -795,7 +961,17 @@ const { data: saved, error } = await q.select('*').single()
 
   async function remove(id: string) {
     if (!can(page, 'delete')) { alert('Ação não autorizada.'); return }
-
+    const record = (data[page] || []).find(item => item.id === id)
+    if (page === 'sales') { alert('Vendas devem ser canceladas pelo fluxo próprio, sem exclusão direta.'); return }
+    if (page === 'quotes' && (!record || !['draft', 'sent'].includes(String(record.status)))) {
+      alert('Orçamentos aprovados ou encerrados não podem ser excluídos.'); return
+    }
+    if (page === 'work_orders' && (!record || !['waiting', 'in_progress'].includes(String(record.status)))) {
+      alert('Ordens de serviço concluídas ou entregues não podem ser excluídas.'); return
+    }
+    if (page === 'work_orders' && data.sales.some(s => s.work_order_id === id)) {
+      alert('Esta OS possui uma venda vinculada e não pode ser excluída.'); return
+    }
     if (!confirm('Deseja realmente excluir este registro?')) return
 
     if (['sales','expenses','cash_entries','goals'].includes(page)) {
@@ -842,6 +1018,7 @@ const { data: saved, error } = await q.select('*').single()
     if (page === 'quotes' || page === 'work_orders') {
       if (!orgId || operationLoading || operationErrors[page]) { alert('Conexão indisponível.'); return }
       if (page === 'quotes') {
+        if (!['draft', 'sent'].includes(String(data.quotes.find(q => q.id === id)?.status))) { alert('Orçamento protegido contra exclusão.'); return }
         if (data.work_orders.some(o => o.quote_id === id)) { alert('Este orçamento possui uma OS vinculada e não pode ser excluído.'); return }
         if (Number(data.quotes.find(q => q.id === id)?.item_count || 0) > 0) { alert('Para preservar os itens, não exclua orçamentos com itens nesta fase.'); return }
       }
@@ -866,7 +1043,7 @@ const { data: saved, error } = await q.select('*').single()
     if(!window.confirm('Cancelar esta venda? O estoque será estornado e o pagamento removido.'))return
     const {error}=await supabase.rpc('ap_cancel_item_sale',{p_org:orgId,p_sale:id})
     if(error)alert('Não foi possível cancelar: '+error.message)
-    else window.location.reload()
+    else { try { await refreshAfterSale(orgId); setPage('sales'); setSearch(''); setSaleDetails(null) } catch (e) { alert('Venda cancelada, mas falhou a atualização da tela: ' + (e instanceof Error ? e.message : String(e))) } }
   }
 
   function exportCsv() {
@@ -947,12 +1124,12 @@ const { data: saved, error } = await q.select('*').single()
           </div>
           <div className="bottom-grid"><section className="panel"><div className="panel-head"><div><h3>Atividade recente</h3><p>Últimas vendas cadastradas</p></div><button className="text-action" onClick={() => navigate('sales')}>Ver todas →</button></div>{sales.length ? <div className="activity-list">{sales.slice(0,5).map(s => <div className="activity-item" key={s.id}><span className="activity-icon"><ShoppingCart size={17}/></span><div><strong>{s.description}</strong><small>{s.customer || 'Venda avulsa'} · {s.date || 'Sem data'}</small></div><b>{currency(number(s.amount))}</b></div>)}</div> : <Empty text="As vendas cadastradas aparecerão aqui."/>}</section>
 
-            <section className="panel"><div className="panel-head"><div><h3>Pulso da loja <Flame size={18} className="flame"/></h3><p>Indicadores operacionais</p></div></div><div className="pulse-list"><Pulse icon={Package} label="Produtos cadastrados" value={String(data.products.length)}/><Pulse icon={ArrowDownRight} label="Produtos em estoque baixo" value={String(data.products.filter(x => number(x.quantity) <= number(x.minimum)).length)}/><Pulse icon={ClipboardList} label="Orçamentos abertos" value={String(data.quotes.filter(x => String(x.status || 'Aberto').toLowerCase().includes('abert')).length)}/><Pulse icon={Wrench} label="Ordens em andamento" value={String(data.work_orders.filter(x => !String(x.status).toLowerCase().includes('conclu')).length)}/></div></section></div>
+            <section className="panel"><div className="panel-head"><div><h3>Pulso da loja <Flame size={18} className="flame"/></h3><p>Indicadores operacionais</p></div></div><div className="pulse-list"><Pulse icon={Package} label="Produtos cadastrados" value={String(data.products.length)}/><Pulse icon={ArrowDownRight} label="Produtos em estoque baixo" value={String(data.products.filter(x => number(x.quantity) <= number(x.minimum)).length)}/><Pulse icon={ClipboardList} label="Orçamentos abertos" value={String(data.quotes.filter(x => ['draft','sent'].includes(String(x.status))).length)}/><Pulse icon={Wrench} label="Ordens em andamento" value={String(data.work_orders.filter(x => ['waiting','in_progress'].includes(String(x.status))).length)}/></div></section></div>
 
         </> : page === 'inventory' ? (orgId ? <><div className="page-heading"><div><h1>Controle de estoque</h1><p>Controle por local, entradas, saídas e transferências</p></div></div><InventoryPanel orgId={orgId} products={data.products.map((p) => ({
   ...p,
   name: String(p.label || p.name || 'Produto sem nome').trim()
-}))} onUpdated={() => {}}/></> : null) : page === 'hr' ? (orgId ? <HRManager orgId={orgId} /> : <div className="notice">Empresa não identificada.</div>) : page === 'settings' ? <><div className="page-heading"><div><div className="eyebrow">PREFERÊNCIAS</div><h1>Configurações</h1><p>Personalize a identificação deste ambiente local.</p></div></div><div className="panel settings-panel"><label>Nome da loja<input value={shopName} onChange={e => setShopName(e.target.value)} placeholder="Nome da empresa"/></label><p>O nome é salvo automaticamente neste navegador. As permissões dos funcionários são salvas no Supabase. O nome exibido aqui continua local a este navegador.</p><div className="notice"><BadgeCheck size={17}/> Não use esta prévia com dados reais ou sensíveis antes da autenticação e validação das políticas RLS.</div></div><div className="panel settings-panel" style={{marginTop:16}}><h3>Taxas do cartão de crédito (TESTE)</h3><p>Percentuais fictícios por parcela. Atualize com a tabela real antes de utilizar em vendas.</p><div className="form-grid">{Array.from({length:12},(_,i)=>i+1).map(n=><label key={n}>{n}x — acréscimo (%)<input type="number" min="0" max="100" step="0.01" value={cardRates[n]??''} onChange={e=>setCardRates(old=>({...old,[n]:Number(e.target.value)}))}/></label>)}</div><button className="primary-btn" disabled={rateSaving||!orgId} onClick={async()=>{if(!orgId)return;setRateSaving(true);try{const rows=Array.from({length:12},(_,i)=>({organization_id:orgId,installments:i+1,rate_percent:cardRates[i+1]}));if(rows.some(r=>r.rate_percent===undefined||!Number.isFinite(r.rate_percent)||r.rate_percent<0||r.rate_percent>100))throw Error('Preencha taxas validas de 1x a 12x');const {error}=await supabase.from('ap_card_rates').upsert(rows,{onConflict:'organization_id,installments'});if(error)throw error;alert('Taxas atualizadas no Supabase.');}catch(e){alert('Erro ao salvar taxas: '+(e instanceof Error?e.message:String(e)))}finally{setRateSaving(false)}}}>{rateSaving?'Salvando…':'Salvar tabela de taxas'}</button></div></> : <>
+}))} onUpdated={() => {}}/></> : null) : page === 'hr' ? (orgId ? <HRManager orgId={orgId} /> : <div className="notice">Empresa não identificada.</div>) : page === 'settings' ? <><div className="page-heading"><div><div className="eyebrow">PREFERÊNCIAS</div><h1>Configurações</h1><p>Personalize a identificação deste ambiente local.</p></div></div><div className="panel settings-panel"><label>Nome da loja<input value={shopName} onChange={e => setShopName(e.target.value)} placeholder="Nome da empresa"/></label><p>O nome é salvo automaticamente neste navegador. As permissões dos funcionários são salvas no Supabase. O nome exibido aqui continua local a este navegador.</p><div className="notice"><BadgeCheck size={17}/> Não use esta prévia com dados reais ou sensíveis antes da autenticação e validação das políticas RLS.</div></div><div className="panel settings-panel" style={{marginTop:16}}><h3>Taxas do cartão de crédito (1x a 18x)</h3><p>Taxas base por parcela, sem o adicional de 1 ponto percentual para Elo e Amex. Débito: 2,99%.</p><div className="form-grid">{Array.from({length:18},(_,i)=>i+1).map(n=><label key={n}>{n}x — acréscimo (%)<input type="number" min="0" max="100" step="0.01" value={cardRates[n]??''} onChange={e=>setCardRates(old=>({...old,[n]:Number(e.target.value)}))}/></label>)}</div><button className="primary-btn" disabled={rateSaving||!orgId} onClick={async()=>{if(!orgId)return;setRateSaving(true);try{const rows=Array.from({length:18},(_,i)=>({organization_id:orgId,installments:i+1,rate_percent:cardRates[i+1]}));if(rows.some(r=>r.rate_percent===undefined||!Number.isFinite(r.rate_percent)||r.rate_percent<0||r.rate_percent>100))throw Error('Preencha taxas validas de 1x a 18x');const {error}=await supabase.from('ap_card_rates').upsert(rows,{onConflict:'organization_id,installments'});if(error)throw error;alert('Taxas atualizadas no Supabase.');}catch(e){alert('Erro ao salvar taxas: '+(e instanceof Error?e.message:String(e)))}finally{setRateSaving(false)}}}>{rateSaving?'Salvando…':'Salvar tabela de taxas'}</button></div></> : <>
 
           <div className="page-heading"><div><div className="eyebrow">AUTO PERFORMANCE / {page.toUpperCase()}</div><h1>{config[page].title}</h1><p>{config[page].subtitle}</p></div><div className="heading-actions"><button className="outline-btn" onClick={exportCsv}><Download size={17}/> Exportar CSV</button><button className="primary-btn" onClick={openNew} disabled={!can(page, 'create') || (page === 'customers' && (customerLoading || !!customerError)) || (['sales','expenses','cash_entries','goals'].includes(page) && !!financeErrors[page]) || (page === 'vehicles' && (vehicleLoading || !!vehicleError)) || (['quotes','work_orders'].includes(page) && (operationLoading || !!operationErrors[page]))}><Plus size={17}/> Novo registro</button></div></div>
 
@@ -964,7 +1141,14 @@ const { data: saved, error } = await q.select('*').single()
           {page === 'vehicles' && (vehicleLoading || vehicleError) && <div className="notice">{vehicleLoading ? 'Carregando veículos do Supabase…' : vehicleError}</div>}
 
           {['quotes','work_orders'].includes(page) && (operationLoading || operationErrors[page]) && <div className="notice">{operationLoading ? 'Carregando operações do Supabase…' : operationErrors[page]}</div>}
-          <section className="panel table-panel"><div className="table-tools"><h3>Registros</h3><div className="search-box"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar registros..."/></div></div><div className="table-scroll"><table><thead><tr>{config[page].fields.slice(0,5).map(f => <th key={f.key}>{f.label}</th>)}<th>Ações</th></tr></thead><tbody>{visibleRows.map(r => <tr key={r.id}>{config[page].fields.slice(0,5).map(f => <td key={f.key}>{['amount','price','cost'].includes(f.key) && !(page === 'cash_entries' && f.key === 'amount') ? currency(number(r[f.key])) : ['vehicles','sales'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || (r.customer_id ? 'Cliente não encontrado' : 'Sem proprietário')) : ['quotes','work_orders'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || '—') : ['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id' ? (data.vehicles.find(v => v.id === r.vehicle_id)?.plate || '—') : f.key === 'item_id' ? ([...data.products,...data.services].find(i => i.id === r.item_id)?.name || '—') : f.key === 'item_type' ? (r.item_type === 'product' ? 'Produto' : r.item_type === 'service' ? 'Serviço' : '—') : page === 'cash_entries' && f.key === 'kind' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '↙' : '↗'} {cashTypeLabel(String(r.kind || ''))}</span> : page === 'cash_entries' && f.key === 'amount' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '+' : '−'} {currency(number(r.amount))}</span> : page === 'cash_entries' && f.key === 'description' ? <>{String(r.description || '').startsWith('Recebimento de venda') ? 'Recebimento de venda' : String(r.description || '')}{isAutomaticCash(r) && <small className="ap-auto-label">Automático</small>}</> : String(r[f.key] ?? '—')}</td>)}<td><div className="table-actions">{page === 'sales' && <button type="button" onClick={() => setSaleDetails(r)} title="Consultar detalhes da venda">Detalhes</button>}{can(page, 'edit') && !(page === 'cash_entries' && isAutomaticCash(r)) && <button onClick={() => openEdit(r)} title="Editar">Editar</button>}{page === 'sales' && can('sales','edit') && trackedSales.includes(r.id) && r.status!=='cancelled' && <button type="button" onClick={()=>void cancelTrackedSale(r.id)}>Cancelar venda</button>}{page === 'work_orders' && can(page, 'edit') && r.status === 'finished' && <button type="button" onClick={() => setWarrantyOrder(r)} title="Emitir termo de garantia">Garantia</button>}{can(page, 'delete') && !(page === 'cash_entries' && isAutomaticCash(r)) && <button onClick={() => remove(r.id)} title="Excluir" className="delete-btn"><Trash2 size={16}/></button>}</div></td></tr>)}</tbody></table>{!visibleRows.length && <Empty text={search ? 'Nenhum registro corresponde à pesquisa.' : 'Nenhum registro cadastrado. Use “Novo registro” para começar.'}/>}</div></section>
+          <section className="panel table-panel"><div className="table-tools"><h3>Registros</h3><div className="search-box"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar registros..."/></div></div><div className="table-scroll"><table><thead><tr>{config[page].fields.slice(0,5).map(f => <th key={f.key}>{f.label}</th>)}<th>Ações</th></tr></thead><tbody>{visibleRows.map(r => <tr key={r.id}>{config[page].fields.slice(0,5).map(f => <td key={f.key}>{['amount','price','cost'].includes(f.key) && !(page === 'cash_entries' && f.key === 'amount') ? currency(number(r[f.key])) : ['vehicles','sales'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || (r.customer_id ? 'Cliente não encontrado' : 'Sem proprietário')) : ['quotes','work_orders'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || '—') : ['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id' ? (data.vehicles.find(v => v.id === r.vehicle_id)?.plate || '—') : f.key === 'item_id' ? ([...data.products,...data.services].find(i => i.id === r.item_id)?.name || '—') : f.key === 'item_type' ? (r.item_type === 'product' ? 'Produto' : r.item_type === 'service' ? 'Serviço' : '—') : page === 'cash_entries' && f.key === 'kind' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '↙' : '↗'} {cashTypeLabel(String(r.kind || ''))}</span> : page === 'cash_entries' && f.key === 'amount' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '+' : '−'} {currency(number(r.amount))}</span> : page === 'cash_entries' && f.key === 'description' ? <>{String(r.description || '').startsWith('Recebimento de venda') ? 'Recebimento de venda' : String(r.description || '')}{isAutomaticCash(r) && <small className="ap-auto-label">Automático</small>}</> : page === 'work_orders' && f.key === 'quote_id' ? (r.quote_id ? `Orçamento ${String(r.quote_id).slice(0,8)}` : '—') : f.key === 'status' ? statusLabel(String(r.status || '')) : String(r[f.key] ?? '—')}</td>)}<td><div className="table-actions">{page==='quotes' && <button type="button" onClick={()=>printQuote(r)}>PDF / Imprimir</button>}{page==='quotes' && <button type="button" onClick={()=>shareQuote(r)}>WhatsApp</button>}
+          {page==='quotes' && can('quotes','edit') && can('work_orders','create') && ['draft','sent'].includes(String(r.status)) && <button type="button" onClick={()=>void approveQuote(r)}>Aprovar e gerar OS</button>}
+          {page==='work_orders' && can('work_orders','edit') && can('sales','create') && r.status!=='cancelled' && r.status!=='delivered' && <button type="button" onClick={()=>void finishOs(r)}>{r.status==='finished'?'Abrir venda':'Concluir → Venda'}</button>}
+          {page==='work_orders' && r.status==='finished' && can('work_orders','edit') && <button type="button" onClick={()=>void deliverOs(r)}>Entregar / Garantia</button>}
+          {page==='sales' && r.status==='draft' && can('sales','create') && <button type="button" onClick={()=>{setPaySale(r);setPayMethod('pix');setPayBrand('');setPayInstallments('1');setPayLocations({})}}>Receber</button>}
+          {page==='sales' && r.status==='cancelled' && <small>Cancelada</small>}
+          {page==='sales' && r.status==='draft' && can('sales','edit') && <button type="button" onClick={()=>void cancelOsSale(r)}>Cancelar pendente</button>}
+          {page === 'sales' && <button type="button" onClick={() => setSaleDetails(r)} title="Consultar detalhes da venda">Detalhes</button>}{can(page, 'edit') && !(page === 'quotes' && !['draft','sent'].includes(String(r.status))) && !(page === 'work_orders' && !['waiting','in_progress'].includes(String(r.status))) && !(page === 'sales' && (r.status !== 'draft' || Boolean(r.work_order_id))) && !(page === 'cash_entries' && isAutomaticCash(r)) && <button onClick={() => openEdit(r)} title="Editar">Editar</button>}{page === 'sales' && can('sales','edit') && trackedSales.includes(r.id) && r.status!=='cancelled' && <button type="button" onClick={()=>void cancelTrackedSale(r.id)}>Cancelar venda</button>}{page === 'work_orders' && can(page, 'edit') && r.status === 'delivered' && <button type="button" onClick={() => setWarrantyOrder(r)} title="Emitir termo de garantia">Garantia</button>}{can(page, 'delete') && page !== 'sales' && !(page === 'quotes' && !['draft','sent'].includes(String(r.status))) && !(page === 'work_orders' && (!['waiting','in_progress'].includes(String(r.status)) || data.sales.some(s => s.work_order_id === r.id))) && !(page === 'cash_entries' && isAutomaticCash(r)) && <button onClick={() => remove(r.id)} title="Excluir" className="delete-btn"><Trash2 size={16}/></button>}</div></td></tr>)}</tbody></table>{!visibleRows.length && <Empty text={search ? 'Nenhum registro corresponde à pesquisa.' : 'Nenhum registro cadastrado. Use “Novo registro” para começar.'}/>}</div></section>
 
         </>}
 
@@ -973,7 +1157,14 @@ const { data: saved, error } = await q.select('*').single()
     </div>
 
     {celebrate && <div aria-hidden="true" className="ap-celebration">{Array.from({length:32},(_,i)=><span key={i} style={{left:`${(i*37)%100}%`,animationDelay:`${(i%7)*0.09}s`,background:['#6678ff','#a56cff','#35e1cc','#ffc857'][i%4]}} />)}</div>}
-    {warrantyOrder && <WarrantyDialog orderId={warrantyOrder.id} customer={String(data.customers.find(c=>c.id===warrantyOrder.customer_id)?.name || 'Cliente não identificado')} vehicle={(()=>{const v=data.vehicles.find(v=>v.id===warrantyOrder.vehicle_id);return v ? [v.brand,v.model,v.plate].filter(Boolean).join(' · ') : 'Não informado'})()} technician={String(warrantyOrder.technician || '')} finishedAt={String(warrantyOrder.finished_at || '')} onClose={()=>setWarrantyOrder(null)}/>}
+    {paySale && <div className="modal-backdrop"><div className="modal" style={{maxWidth:650,padding:22}}><h2>Receber venda da OS</h2><p>Valor aprovado: <strong>{currency(number(paySale.amount))}</strong>. O caixa só será atualizado após a confirmação.</p>
+      <div className="form-grid"><label>Forma de pagamento<select className="select" value={payMethod} onChange={e=>{setPayMethod(e.target.value);setPayBrand('');setPayInstallments('1')}}><option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Débito</option><option value="credit">Crédito</option></select></label>
+      {['credit','debit'].includes(payMethod)&&<label>Bandeira<select className="select" value={payBrand} onChange={e=>setPayBrand(e.target.value)}><option value="">Selecione</option><option value="visa">Visa</option><option value="mastercard">Mastercard</option><option value="elo">Elo</option><option value="amex">Amex</option><option value="other">Outra</option></select></label>}
+      {payMethod==='credit'&&<label>Parcelas<select className="select" value={payInstallments} onChange={e=>setPayInstallments(e.target.value)}>{Array.from({length:18},(_,i)=>i+1).map(n=><option key={n} value={n}>{n}x · {cardRates[n]??'Taxa indisponível'}%</option>)}</select></label>}</div>
+      {saleItemRows.filter(i=>i.sale_id===paySale.id&&i.item_type==='product').map((i,n)=><label key={n} style={{display:'block',marginTop:12}}>Estoque de origem — {data.products.find(p=>p.id===i.product_id)?.name||'Produto'}<select className="select" value={payLocations[String(i.product_id)]||''} onChange={e=>setPayLocations(old=>({...old,[String(i.product_id)]:e.target.value}))}><option value="">Selecione estoque</option>{stockLocations.filter(l=>stockBalances.some(b=>b.location_id===l.id&&b.product_id===i.product_id&&b.quantity>=i.quantity)).map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select></label>)}
+      <p style={{marginTop:15}}>Total com taxas: <strong>{currency(Math.round(number(paySale.amount)*(1+((payMethod==='credit'?Number(cardRates[Number(payInstallments)]||0):payMethod==='debit'?2.99:0)+(['elo','amex'].includes(payBrand)?1:0))/100)*100)/100)}</strong></p>
+      <div className="modal-actions"><button type="button" className="outline-btn" onClick={()=>setPaySale(null)}>Voltar</button><button type="button" className="primary-btn" disabled={saving||(['credit','debit'].includes(payMethod)&&!payBrand)} onClick={()=>void confirmOsPayment()}>{saving?'Processando…':'Confirmar pagamento'}</button></div></div></div>}
+    {warrantyOrder && <WarrantyDialog organizationId={orgId||''} saleId={String(data.sales.find(x=>x.work_order_id===warrantyOrder.id)?.id||'')} orderId={warrantyOrder.id} customer={String(data.customers.find(c=>c.id===warrantyOrder.customer_id)?.name || 'Cliente não identificado')} vehicle={(()=>{const v=data.vehicles.find(v=>v.id===warrantyOrder.vehicle_id);return v ? [v.brand,v.model,v.plate].filter(Boolean).join(' · ') : 'Não informado'})()} technician={String(warrantyOrder.technician || '')} finishedAt={String(warrantyOrder.finished_at || '')} onClose={()=>setWarrantyOrder(null)}/>}
     {saleDetails && page === 'sales' && (() => {
       const sale = data.sales.find(r => r.id === saleDetails.id) || saleDetails
       const info = installmentDetails[sale.id]
@@ -985,13 +1176,13 @@ const { data: saved, error } = await q.select('*').single()
       const vehicle = data.vehicles.find(v => v.id === sale.vehicle_id)
       const items = saleItemRows.filter(item => item.sale_id === sale.id)
       const method = ({credit_card:'Cartão de crédito',debit_card:'Cartão de débito',pix:'PIX',cash:'Dinheiro',transfer:'Transferência'} as Record<string,string>)[String(sale.method)] || String(sale.method || 'Não informado')
-      const summary = `Venda: ${String(sale.description || '')}\nCliente: ${String(client?.name || 'Não informado')}\nPagamento: ${method} · ${count}x\nValor original: ${currency(base)}\nTaxa: ${Number(info?.rate_percent || 0)}% (${currency(fee)})\nTotal: ${currency(totalCents/100)}`
+      const summary = `Venda: ${String(sale.description || '')}\nCliente: ${String(client?.name || 'Não informado')}\nPagamento: ${method} · ${count}x · Bandeira: ${info?.card_brand || 'Não informada'}\nValor original: ${currency(base)}\nTaxa: ${Number(info?.rate_percent || 0)}% (${currency(fee)})\nTotal: ${currency(totalCents/100)}`
       return <div className="ap-detail-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setSaleDetails(null)}}>
         <aside className="ap-detail-drawer" role="dialog" aria-modal="true" aria-label="Detalhes da venda">
           <div className="ap-detail-head"><div><div className="eyebrow">AUTO PERFORMANCE / VENDAS</div><h2>Detalhes da venda</h2></div><button className="icon-btn" type="button" onClick={()=>setSaleDetails(null)} aria-label="Fechar detalhes"><X size={21}/></button></div>
           <div className="ap-detail-body">
             <div className="ap-detail-total"><span>Total cobrado</span><strong>{currency(totalCents/100)}</strong><small>{sale.status==='cancelled'?'Cancelada':'Venda registrada'} · {String(sale.date || '')}</small></div>
-            <section className="ap-detail-section"><h3>Pagamento</h3><div className="ap-detail-line"><span>Forma de pagamento</span><b>{method}</b></div><div className="ap-detail-line"><span>Parcelas</span><b>{count}x</b></div><div className="ap-detail-line"><span>Valor original</span><b>{currency(base)}</b></div><div className="ap-detail-line"><span>Taxa aplicada</span><b>{info?`${info.rate_percent}%`:'Não registrada'}</b></div><div className="ap-detail-line"><span>Acréscimo</span><b>{info?currency(fee):'Não registrado'}</b></div><div className="ap-detail-line ap-detail-emphasis"><span>Valor final</span><b>{currency(totalCents/100)}</b></div></section>
+            <section className="ap-detail-section"><h3>Pagamento</h3><div className="ap-detail-line"><span>Forma de pagamento</span><b>{method}</b></div><div className="ap-detail-line"><span>Parcelas</span><b>{count}x</b></div><div className="ap-detail-line"><span>Bandeira</span><b>{info?.card_brand || "Não informada"}</b></div><div className="ap-detail-line"><span>Valor original</span><b>{currency(base)}</b></div><div className="ap-detail-line"><span>Taxa aplicada</span><b>{info?`${info.rate_percent}%`:'Não registrada'}</b></div><div className="ap-detail-line"><span>Acréscimo</span><b>{info?currency(fee):'Não registrado'}</b></div><div className="ap-detail-line ap-detail-emphasis"><span>Valor final</span><b>{currency(totalCents/100)}</b></div></section>
             {info && count > 1 && <section className="ap-detail-section"><h3>Divisão das parcelas</h3><p className="ap-detail-hint">Valores informativos. O recebimento é lançado integralmente na venda.</p>{Array.from({length:Math.min(count,24)},(_,i)=>{const basic=Math.floor(totalCents/count);const cents=basic+(i<totalCents%count?1:0);return <div className="ap-detail-line" key={i}><span>Parcela {String(i+1).padStart(2,'0')}/{String(count).padStart(2,'0')}</span><b>{currency(cents/100)}</b></div>})}</section>}
             <section className="ap-detail-section"><h3>Cliente e veículo</h3><div className="ap-detail-line"><span>Cliente</span><b>{String(client?.name || 'Não informado')}</b></div><div className="ap-detail-line"><span>Veículo</span><b>{String(vehicle?.plate || 'Não vinculado')}</b></div><div className="ap-detail-line"><span>Descrição</span><b>{String(sale.description || 'Venda')}</b></div></section>
             {items.length>0 && <section className="ap-detail-section"><h3>Itens da venda</h3>{items.map((item,i)=><div className="ap-detail-line" key={i}><span>{item.quantity}x {item.item_type==='product'?(data.products.find(p=>p.id===item.product_id)?.name || 'Produto'):(data.services.find(p=>p.id===item.service_id)?.name || 'Serviço')}</span><b>{currency(Number(item.unit_price)*Number(item.quantity))}</b></div>)}</section>}
@@ -1066,9 +1257,20 @@ const { data: saved, error } = await q.select('*').single()
         {saleItems.length>0&&<><div className="ap-sale-item-total"><strong>Subtotal: {currency(saleItemTotal)}</strong><label>Desconto (R$)<input type="number" min="0" max={saleItemTotal} step="0.01" value={form.discount||'0'} onChange={e=>setForm(old=>({...old,discount:e.target.value}))}/></label><strong>Total: {currency(Math.max(0,saleItemTotal-Number(form.discount||0)))}</strong></div><p>Preço e custo são conferidos novamente pelo servidor. Cliente e veículo novos devem ser cadastrados antes desta venda.</p></>}
         <small>Sem itens selecionados, a venda avulsa atual continua disponível.</small>
       </section>}
+      {page === 'quotes' && <section className="ap-sale-items"><h3>Itens do orçamento</h3>
+        <div className="form-grid"><label>Tipo<select className="select" value={form.item_type||'service'} onChange={e=>setForm(old=>({...old,item_type:e.target.value,item_id:'',unit_price:''}))}><option value="service">Serviço</option><option value="product">Produto</option></select></label>
+        <label>Produto / serviço<select className="select" value={form.item_id||''} onChange={e=>{const item=(form.item_type==='product'?data.products:data.services).find(i=>i.id===e.target.value);setForm(old=>({...old,item_id:e.target.value,unit_price:item?String(item.price||0):''}))}}><option value="">Selecione</option>{(form.item_type==='product'?data.products:data.services).map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
+        <label>Quantidade<input type="number" min="0.01" step="any" value={form.quantity||'1'} onChange={e=>setForm(old=>({...old,quantity:e.target.value}))}/></label>
+        <label>Preço unitário<input type="number" min="0" step="0.01" value={form.unit_price||'0'} onChange={e=>setForm(old=>({...old,unit_price:e.target.value}))}/></label></div>
+        <button type="button" className="outline-btn" onClick={()=>{const id=form.item_id;const quantity=Number(form.quantity||1);const price=Number(form.unit_price||0);if(!id||!Number.isFinite(quantity)||quantity<=0||!Number.isFinite(price)||price<0){alert('Selecione item, quantidade e preço válidos.');return}setQuoteItems(old=>[...old,{type:form.item_type==='product'?'product':'service',id,quantity,price}]);setForm(old=>({...old,item_id:'',quantity:'1',unit_price:''}))}}>+ Adicionar item</button>
+        {quoteItems.map((i,n)=><div className="ap-sale-item" key={n}><span>{(i.type==='product'?data.products:data.services).find(x=>x.id===i.id)?.name||'Item'} · {i.quantity} × {currency(i.price)}</span><strong>{currency(i.quantity*i.price)}</strong><button type="button" className="icon-btn" onClick={()=>setQuoteItems(old=>old.filter((_,j)=>j!==n))}><Trash2 size={15}/></button></div>)}
+        <div className="ap-sale-item-total"><strong>Total: {currency(Math.max(0,quoteItems.reduce((n,i)=>n+i.quantity*i.price,0)-Number(form.discount||0)))}</strong></div>
+      </section>}
       {page === 'products' && editing && <p className="ap-stock-hint">A quantidade é controlada exclusivamente em Controle de estoque. Alterações aqui não modificam o saldo.</p>}
       {page === 'expenses' && <div className="ap-expense-options"><label>Situação da despesa<select className="select" value={form.status || 'paid'} onChange={e=>setForm(old=>({...old,status:e.target.value}))}><option value="paid">Paga — movimentar o caixa</option><option value="pending">Pendente — não movimentar o caixa</option></select></label>{form.status !== 'pending' && <label>Forma de pagamento<select className="select" value={form.payment_method || 'pix'} onChange={e=>setForm(old=>({...old,payment_method:e.target.value}))}><option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Débito</option><option value="credit">Crédito</option><option value="transfer">Transferência</option><option value="other">Outro</option></select></label>}</div>}
-      <div className="form-grid">{config[page].fields.filter(f => !(page === 'products' && editing && f.key === 'quantity') && !(page === 'sales' && (f.key === 'customer_id' || f.key === 'vehicle_id' || (saleItems.length>0 && ['description','amount','cost'].includes(f.key)) || (f.key === 'installments' && form.method !== 'credit')))).map(f => <label key={f.key}>{f.label}{f.required && <span className="required"> *</span>}{(['vehicles','quotes','work_orders'].includes(page) && f.key === 'customer_id') ? <select className="select" value={form.customer_id || ''} onChange={e => setForm(old => ({ ...old, customer_id: e.target.value, vehicle_id: '', quote_id: '' }))}><option value="">{page === 'vehicles' ? 'Sem proprietário' : 'Selecione o cliente'}</option>{data.customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select> : (['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id') ? <select className="select" value={form.vehicle_id || ''} onChange={e => setForm(old => ({ ...old, vehicle_id: e.target.value }))}><option value="">Sem veículo</option>{data.vehicles.filter(v => !v.customer_id || v.customer_id === form.customer_id).map(v => <option key={v.id} value={v.id}>{v.plate || v.model || v.id.slice(0,8)}</option>)}</select> : (page === 'work_orders' && f.key === 'quote_id') ? <select className="select" value={form.quote_id || ''} onChange={e => setForm(old => ({ ...old, quote_id: e.target.value }))}><option value="">Sem orçamento</option>{data.quotes.filter(q => q.status === 'approved' && q.customer_id === form.customer_id).map(q => <option key={q.id} value={q.id}>Orçamento {q.id.slice(0,8)} · {currency(number(q.amount))}</option>)}</select> : (page === 'quotes' && f.key === 'item_type') ? <select className="select" value={form.item_type || 'service'} onChange={e => setForm(old => ({ ...old, item_type: e.target.value, item_id: '', unit_price: '' }))}><option value="service">Serviço</option><option value="product">Produto</option></select> : (page === 'quotes' && f.key === 'item_id') ? <select className="select" value={form.item_id || ''} onChange={e => { const item = (form.item_type === 'product' ? data.products : data.services).find(i => i.id === e.target.value); setForm(old => ({ ...old, item_id: e.target.value, unit_price: item ? String(item.price || 0) : '' })) }}><option value="">Sem item</option>{(form.item_type === 'product' ? data.products : data.services).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select> : (['quotes','work_orders'].includes(page) && f.key === 'status') ? <select className="select" value={form.status || (page === 'quotes' ? 'open' : 'waiting')} onChange={e => setForm(old => ({ ...old, status: e.target.value }))}>{(page === 'quotes' ? [['open','Aberto'],['approved','Aprovado'],['rejected','Recusado']] : [['waiting','Aguardando'],['in_progress','Em andamento'],['finished','Concluída'],['delivered','Entregue'],['cancelled','Cancelada']]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select> : (page === 'cash_entries' && f.key === 'kind') ? <select className="select" value={form.kind || 'income'} onChange={e => setForm(old => ({...old,kind:e.target.value}))}><option value="income">Entrada — dinheiro recebido</option><option value="expense">Saída — dinheiro pago</option></select> : (page === 'sales' && f.key === 'method') ? <select className="select" value={['pix','cash','debit','credit'].includes(form.method || '') ? form.method : form.method ? 'legacy' : ''} onChange={e => setForm(old => ({ ...old, method: e.target.value, installments: '1' }))} required><option value="" disabled>Selecione a forma de pagamento</option>{form.method && !['pix','cash','debit','credit'].includes(form.method) && <option value="legacy" disabled>Anterior: {form.method} — selecione uma opção</option>}<option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select> : (page === 'sales' && f.key === 'installments') ? <><select className="select" value={form.installments || '1'} onChange={e => setForm(old => ({ ...old, installments: e.target.value }))}>{Array.from({ length: 12 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}x — {cardRates[n]===undefined?'taxa não configurada':cardRates[n]+'%'}</option>)}</select><small style={{ display: 'block', marginTop: 6, opacity: .8 }}>Acréscimo: {currency(Math.round((saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount))*(cardRates[Number(form.installments||1)]||0))/100)} · Total: {currency(Math.round((saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount))*(1+(cardRates[Number(form.installments||1)]||0)/100)*100)/100)} · Parcela aproximada: {currency((Math.round((saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount))*(1+(cardRates[Number(form.installments||1)]||0)/100)*100)/100)/Math.max(1,Number(form.installments||1)))}</small></> : <input type={f.type || 'text'} step={f.type === 'number' ? 'any' : undefined} min={f.type === 'number' ? '0' : undefined} value={form[f.key] || ''} onChange={e => setForm(old => ({ ...old, [f.key]: e.target.value }))} required={f.required}/>}</label>)}</div><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setModal(false)}>Cancelar</button><button type="submit" className="primary-btn" disabled={saving}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Cadastrar'}</button></div></form></div></div>}
+      {page === 'sales' && ['credit','debit'].includes(form.method || '') && <div className="form-grid"><label>Bandeira do cartão <span className="required">*</span><select className="select" value={form.card_brand || ''} onChange={e=>setForm(old=>({...old,card_brand:e.target.value}))} required><option value="">Selecione a bandeira</option><option value="visa">Visa</option><option value="mastercard">Mastercard</option><option value="elo">Elo (+1 p.p.)</option><option value="amex">Amex (+1 p.p.)</option><option value="other">Outra</option></select></label></div>}
+      {page === 'sales' && ['credit','debit'].includes(form.method || '') && (()=>{const base=saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount);const rate=(form.method==='debit'?2.99:(cardRates[Number(form.installments||1)]??0)) + (['elo','amex'].includes(form.card_brand||'')?1:0);const fee=Math.round(base*rate)/100;return <p style={{margin:'10px 0',opacity:.9}}>Taxa aplicada: <strong>{rate.toFixed(2)}%</strong> · Acréscimo: <strong>{currency(fee)}</strong> · Total previsto: <strong>{currency(Math.round((base+fee)*100)/100)}</strong></p>})()}
+      <div className="form-grid">{config[page].fields.filter(f => !(page === 'products' && editing && f.key === 'quantity') && !(page === 'quotes' && ['item_type','item_id','quantity','unit_price'].includes(f.key)) && !(page === 'sales' && (f.key === 'customer_id' || f.key === 'vehicle_id' || (saleItems.length>0 && ['description','amount','cost'].includes(f.key)) || (f.key === 'installments' && form.method !== 'credit')))).map(f => <label key={f.key}>{f.label}{f.required && <span className="required"> *</span>}{(['vehicles','quotes','work_orders'].includes(page) && f.key === 'customer_id') ? <select className="select" value={form.customer_id || ''} onChange={e => setForm(old => ({ ...old, customer_id: e.target.value, vehicle_id: '', quote_id: '' }))}><option value="">{page === 'vehicles' ? 'Sem proprietário' : 'Selecione o cliente'}</option>{data.customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select> : (['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id') ? <select className="select" value={form.vehicle_id || ''} onChange={e => setForm(old => ({ ...old, vehicle_id: e.target.value }))}><option value="">Sem veículo</option>{data.vehicles.filter(v => !v.customer_id || v.customer_id === form.customer_id).map(v => <option key={v.id} value={v.id}>{v.plate || v.model || v.id.slice(0,8)}</option>)}</select> : (page === 'work_orders' && f.key === 'quote_id') ? <select className="select" value={form.quote_id || ''} onChange={e => setForm(old => ({ ...old, quote_id: e.target.value }))}><option value="">Sem orçamento</option>{data.quotes.filter(q => q.status === 'approved' && q.customer_id === form.customer_id).map(q => <option key={q.id} value={q.id}>Orçamento {q.id.slice(0,8)} · {currency(number(q.amount))}</option>)}</select> : (page === 'quotes' && f.key === 'item_type') ? <select className="select" value={form.item_type || 'service'} onChange={e => setForm(old => ({ ...old, item_type: e.target.value, item_id: '', unit_price: '' }))}><option value="service">Serviço</option><option value="product">Produto</option></select> : (page === 'quotes' && f.key === 'item_id') ? <select className="select" value={form.item_id || ''} onChange={e => { const item = (form.item_type === 'product' ? data.products : data.services).find(i => i.id === e.target.value); setForm(old => ({ ...old, item_id: e.target.value, unit_price: item ? String(item.price || 0) : '' })) }}><option value="">Sem item</option>{(form.item_type === 'product' ? data.products : data.services).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select> : (['quotes','work_orders'].includes(page) && f.key === 'status') ? <select className="select" value={form.status || (page === 'quotes' ? 'draft' : 'waiting')} onChange={e => setForm(old => ({ ...old, status: e.target.value }))}>{(page === 'quotes' ? [['draft','Rascunho'],['sent','Aguardando aprovação do cliente'],['rejected','Recusado']] : [['waiting','Aguardando'],['in_progress','Em andamento'],['finished','Concluída'],['delivered','Entregue'],['cancelled','Cancelada']]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select> : (page === 'cash_entries' && f.key === 'kind') ? <select className="select" value={form.kind || 'income'} onChange={e => setForm(old => ({...old,kind:e.target.value}))}><option value="income">Entrada — dinheiro recebido</option><option value="expense">Saída — dinheiro pago</option></select> : (page === 'sales' && f.key === 'method') ? <select className="select" value={['pix','cash','debit','credit'].includes(form.method || '') ? form.method : form.method ? 'legacy' : ''} onChange={e => setForm(old => ({ ...old, method: e.target.value, installments: '1', card_brand: '' }))} required><option value="" disabled>Selecione a forma de pagamento</option>{form.method && !['pix','cash','debit','credit'].includes(form.method) && <option value="legacy" disabled>Anterior: {form.method} — selecione uma opção</option>}<option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select> : (page === 'sales' && f.key === 'installments') ? <><select className="select" value={form.installments || '1'} onChange={e => setForm(old => ({ ...old, installments: e.target.value }))}>{Array.from({ length: 18 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}x — {cardRates[n]===undefined?'taxa não configurada':cardRates[n]+'%'}</option>)}</select><small style={{ display: 'block', marginTop: 6, opacity: .8 }}>Taxa base: {cardRates[Number(form.installments||1)] ?? 'não configurada'}% · Elo/Amex: +1 p.p.</small></> : <input type={f.type || 'text'} step={f.type === 'number' ? 'any' : undefined} min={f.type === 'number' ? '0' : undefined} value={form[f.key] || ''} onChange={e => setForm(old => ({ ...old, [f.key]: e.target.value }))} required={f.required}/>}</label>)}</div><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setModal(false)}>Cancelar</button><button type="submit" className="primary-btn" disabled={saving}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Cadastrar'}</button></div></form></div></div>}
 
   </div>
 
@@ -1081,3 +1283,4 @@ function Pulse({icon:Icon,label,value}:{icon:typeof Activity;label:string;value:
 function Empty({text}:{text:string}) { return <div className="empty-state"><Boxes size={30}/><strong>Sem dados por enquanto</strong><p>{text}</p></div> }
 
 export default App
+
