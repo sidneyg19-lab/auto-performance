@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Printer, Plus, Trash2, X } from 'lucide-react'
+import { supabase } from '../lib/supabase'
 
 type Accessory = { name: string; model: string; price: string }
-type Props = { orderId: string; customer: string; vehicle: string; technician: string; finishedAt: string; onClose: () => void }
+type Props = { organizationId: string; saleId: string; orderId: string; customer: string; vehicle: string; technician: string; finishedAt: string; onClose: () => void }
 type Draft = { equipment: string; model: string; serial: string; term: string; coverage: string; exclusions: string; guidance: string; accessories: Accessory[] }
 const escapeHtml = (v: string) => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c))
 const money = (v: string) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -17,11 +18,25 @@ const fieldStyle: React.CSSProperties = { background: '#0e182c', color: '#eef4ff
 const panelStyle: React.CSSProperties = { background: '#111d34', border: '1px solid #334461', borderRadius: 12, padding: 15, marginTop: 14 }
 const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 7, fontSize: 12, fontWeight: 600, color: '#bcd0ee' }
 
-export default function WarrantyDialog({ orderId, customer, vehicle, technician, finishedAt, onClose }: Props) {
+export default function WarrantyDialog({ organizationId, saleId, orderId, customer, vehicle, technician, finishedAt, onClose }: Props) {
   const storageKey = `auto-performance-warranty-${orderId}`
   const [draft, setDraft] = useState<Draft>(() => {
     try { const saved = localStorage.getItem(storageKey); return saved ? { ...initial, ...JSON.parse(saved) } : initial } catch { return initial }
   })
+  const [persistError,setPersistError]=useState('')
+  const [persisted,setPersisted]=useState(false)
+  useEffect(()=>{let active=true;void (async()=>{
+    const {data,error}=await supabase.from('ap_warranties').select('details').eq('organization_id',organizationId).eq('work_order_id',orderId).maybeSingle()
+    if(!active)return
+    if(error){setPersistError(error.message);return}
+    if(data?.details && typeof data.details==='object'){setDraft({...initial,...data.details as Draft});setPersisted(true)}
+  })();return()=>{active=false}},[organizationId,orderId])
+  async function saveWarranty(){
+    if(!draft.equipment.trim()||!draft.term.trim()){alert('Informe equipamento e prazo de garantia.');return false}
+    const {error}=await supabase.from('ap_warranties').upsert({organization_id:organizationId,work_order_id:orderId,sale_id:saleId||null,details:draft},{onConflict:'organization_id,work_order_id'})
+    if(error){setPersistError(error.message);alert('Não foi possível salvar garantia: '+error.message);return false}
+    setPersisted(true);setPersistError('');return true
+  }
   const change = (field: keyof Omit<Draft, 'accessories'>, value: string) => setDraft(old => ({ ...old, [field]: value }))
   useEffect(() => { try { localStorage.setItem(storageKey, JSON.stringify(draft)) } catch { /* armazenamento indisponível */ } }, [storageKey, draft])
   const add = () => setDraft(old => ({ ...old, accessories: [...old.accessories, { name: '', model: '', price: '' }] }))
@@ -29,7 +44,8 @@ export default function WarrantyDialog({ orderId, customer, vehicle, technician,
   const total = draft.accessories.reduce((sum, a) => sum + (Number(a.price) || 0), 0)
   const date = finishedAt && !Number.isNaN(Date.parse(finishedAt)) ? new Date(finishedAt).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR')
 
-  function print() {
+  async function print() {
+    if(!await saveWarranty())return
     if (!draft.equipment.trim() || !draft.term.trim()) { alert('Informe o equipamento e o prazo de garantia.'); return }
     const box = (label: string, value: string) => `<div class="cell"><span class="caption">${escapeHtml(label)}</span><strong>${escapeHtml(value || 'Não informado')}</strong></div>`
     const clause = (number: string, title: string, content: string) => `<div class="clause"><b class="number">${number}</b><div><strong>${escapeHtml(title)}</strong><p>${escapeHtml(content).replace(/\n/g, '<br>')}</p></div></div>`
@@ -71,9 +87,9 @@ export default function WarrantyDialog({ orderId, customer, vehicle, technician,
           {([['coverage', 'Cobertura'], ['exclusions', 'Exclusões e limitações'], ['guidance', 'Orientações ao cliente']] as const).map(([key, label], i) => <label key={key} style={{ ...labelStyle, marginBottom: 12 }}><span>{String(i + 2).padStart(2, '0')} · {label}</span><textarea style={{ ...fieldStyle, resize: 'vertical', fontFamily: 'inherit' }} rows={3} value={draft[key]} onChange={e => change(key, e.target.value)}/></label>)}
           <p style={{ fontSize: 12, color: '#afbed8', margin: 0 }}>O prazo é preenchido na seção 02. Confirme as condições com a loja; o termo não elimina a garantia legal.</p>
         </div>
-        <p style={{ fontSize: 12, opacity: .85, marginTop: 12 }}>Os dados deste termo são mantidos apenas neste navegador para facilitar a reimpressão. Ainda não estão sincronizados com o Supabase. Use Imprimir / Salvar PDF para guardar uma cópia.</p>
+        <p style={{ fontSize: 12, opacity: .85, marginTop: 12 }}>Os dados são salvos no Supabase antes de imprimir. Use Imprimir / Salvar PDF para guardar uma cópia.</p>
       </div>
-      <div className="modal-actions"><button type="button" className="outline-btn" onClick={onClose}>Fechar</button><button type="button" className="primary-btn" onClick={print}><Printer size={17}/> Imprimir / Salvar PDF</button></div>
+      {persistError&&<p style={{color:'#ffb4b4',padding:12}}>Falha de sincronização: {persistError}</p>}{persisted&&<p style={{padding:12}}>Garantia sincronizada com Supabase.</p>}<div className="modal-actions"><button type="button" className="outline-btn" onClick={onClose}>Fechar</button><button type="button" className="outline-btn" onClick={()=>void saveWarranty()}>Salvar garantia</button><button type="button" className="primary-btn" onClick={print}><Printer size={17}/> Imprimir / Salvar PDF</button></div>
     </div>
   </div>
 }
