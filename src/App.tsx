@@ -97,6 +97,8 @@ function App() {
   const [data, setData] = useState<Collection>(readStore)
 
   const [orgId, setOrgId] = useState<string | null>(null)
+  const [cardRates, setCardRates] = useState<Record<number, number>>({})
+  const [rateSaving, setRateSaving] = useState(false)
   const [role, setRole] = useState('')
   const [permissions, setPermissions] = useState<Record<string, {can_view:boolean;can_create:boolean;can_edit:boolean;can_delete:boolean}>>({})
   const [accessReady, setAccessReady] = useState(false)
@@ -210,6 +212,16 @@ function App() {
       }
 
       setOrgId(membership.organization_id)
+      const [ratesResult, installmentResult] = await Promise.all([
+        supabase.from('ap_card_rates').select('installments,rate_percent').eq('organization_id',membership.organization_id),
+        supabase.from('ap_sale_installments').select('sale_id,installments,rate_percent,base_amount,fee_amount,total_amount').eq('organization_id',membership.organization_id)
+      ])
+      if (!active) return
+      if (ratesResult.error || installmentResult.error) {
+        setFinanceErrors(old=>({...old,sales:'Configuracao de cartao indisponivel: '+(ratesResult.error?.message || installmentResult.error?.message)}))
+      } else {
+        setCardRates(Object.fromEntries((ratesResult.data||[]).map(r=>[r.installments,Number(r.rate_percent)])))
+      }
       setRole(membership.role || '')
       const admin = membership.role === 'owner' || membership.role === 'admin'
       if (!admin) {
@@ -246,7 +258,7 @@ function App() {
           const items = (itemsR.data || []).filter(i => i.sale_id === s.id)
           const item = items[0]
           const payment = (paymentsR.data || []).find(p => p.sale_id === s.id)
-          return { id: s.id, status:s.status||'completed', description: items.length>1 ? `${items.length} itens · ${item?.description || 'Venda'}` : item?.description || 'Venda', customer_id: s.customer_id || '', vehicle_id: s.vehicle_id || '', amount: Number(s.total ?? payment?.amount ?? 0), cost: items.reduce((sum,i)=>sum+Number(i.unit_cost||0)*Number(i.quantity||1),0), method: payment?.method || '', date: String(payment?.paid_at || s.created_at || '').slice(0, 10), installments: 1, created_at: s.created_at || '' } as RecordItem
+          return { id: s.id, status:s.status||'completed', description: (items.length>1 ? `${items.length} itens · ${item?.description || 'Venda'}` : item?.description || 'Venda') + (Number((installmentResult.data||[]).find(x=>x.sale_id===s.id)?.installments||1)>1 ? ` · ${(installmentResult.data||[]).find(x=>x.sale_id===s.id)?.installments}x no crédito` : ''), customer_id: s.customer_id || '', vehicle_id: s.vehicle_id || '', amount: Number(s.total ?? payment?.amount ?? 0), cost: items.reduce((sum,i)=>sum+Number(i.unit_cost||0)*Number(i.quantity||1),0), method: payment?.method || '', date: String(payment?.paid_at || s.created_at || '').slice(0, 10), installments: Number((installmentResult.data||[]).find(x=>x.sale_id===s.id)?.installments||1), created_at: s.created_at || '' } as RecordItem
         })
         setData(old => ({ ...old, sales: mapped }))
       }
@@ -436,6 +448,53 @@ function App() {
 
   function openEdit(row: RecordItem) { if (!can(page, 'edit')) return; if(page==='products') { alert('Para alterar quantidades, use Controle de estoque. Os demais dados do produto podem ser editados.'); } setEditing(row.id); setForm(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v)]))); setModal(true) }
 
+  // Atualiza as colecoes afetadas pela venda sem desmontar a aplicacao nem perder a pagina atual.
+  async function refreshAfterSale(organizationId: string) {
+    const [salesR, itemsR, paymentsR, installmentsR, customersR, vehiclesR, trackedR, cashR, balancesR, productsR] = await Promise.all([
+      supabase.from('sales').select('*').eq('organization_id', organizationId),
+      supabase.from('sale_items').select('*').eq('organization_id', organizationId),
+      supabase.from('payments').select('*').eq('organization_id', organizationId),
+      supabase.from('ap_sale_installments').select('sale_id,installments,rate_percent,base_amount,fee_amount,total_amount').eq('organization_id', organizationId),
+      supabase.from('customers').select('id,name,phone,email,document,notes,created_at').eq('organization_id', organizationId),
+      supabase.from('vehicles').select('id,customer_id,plate,brand,model,model_year,color,notes,created_at').eq('organization_id', organizationId),
+      supabase.from('ap_item_sales').select('sale_id').eq('organization_id', organizationId),
+      supabase.from('cash_entries').select('*').eq('organization_id', organizationId),
+      supabase.from('ap_stock_balances').select('location_id,product_id,quantity').eq('organization_id', organizationId),
+      supabase.from('products').select('*').eq('organization_id', organizationId)
+    ])
+    const failures = [salesR, itemsR, paymentsR, installmentsR, customersR, vehiclesR, trackedR, cashR, balancesR, productsR]
+      .filter(r => r.error).map(r => r.error!.message)
+    if (failures.length) throw new Error('Venda gravada, mas houve falha ao atualizar a tela: ' + failures.join('; '))
+    const installments = new Map((installmentsR.data || []).map(i => [i.sale_id, i]))
+    const mappedSales: RecordItem[] = (salesR.data || []).map(sale => {
+      const items = (itemsR.data || []).filter(item => item.sale_id === sale.id)
+      const payment = (paymentsR.data || []).find(item => item.sale_id === sale.id)
+      const installment = installments.get(sale.id)
+      const count = Number(installment?.installments || 1)
+      const description = items.length > 1 ? `${items.length} itens · ${items[0]?.description || 'Venda'}` : items[0]?.description || 'Venda'
+      return {
+        id: sale.id, status: sale.status || 'completed',
+        description: description + (count > 1 ? ` · ${count}x no crédito` : ''),
+        customer_id: sale.customer_id || '', vehicle_id: sale.vehicle_id || '',
+        amount: Number(sale.total ?? payment?.amount ?? 0),
+        cost: items.reduce((sum, item) => sum + Number(item.unit_cost || 0) * Number(item.quantity || 1), 0),
+        method: payment?.method || '', date: String(payment?.paid_at || sale.created_at || '').slice(0, 10),
+        installments: count, created_at: sale.created_at || ''
+      }
+    })
+    setSaleItemRows(itemsR.data || [])
+    setTrackedSales((trackedR.data || []).map(row => row.sale_id))
+    setStockBalances(balancesR.data || [])
+    setData(old => ({
+      ...old,
+      sales: mappedSales,
+      customers: (customersR.data || []).map(row => ({id:row.id, name:row.name || '', phone:row.phone || '', email:row.email || '', document:row.document || '', notes:row.notes || '', created_at:row.created_at || ''})),
+      vehicles: (vehiclesR.data || []).map(row => ({id:row.id, customer_id:row.customer_id || '', plate:row.plate || '', brand:row.brand || '', model:row.model || '', model_year:row.model_year || '', color:row.color || '', notes:row.notes || '', created_at:row.created_at || ''})),
+      cash_entries: (cashR.data || []).map(row => ({id:row.id, description:row.description || '', kind:row.entry_type || '', category:row.category || '', source_type:row.source_type || '', source_id:row.source_id || '', amount:Number(row.amount || 0), date:String(row.occurred_at || '').slice(0,10), created_at:row.occurred_at || ''})),
+      products: (productsR.data || []).map(row => ({id:row.id, name:String(row.name || row.label || row.title || '').trim(), price:Number(row.sale_price || 0), cost:Number(row.cost || 0), quantity:Number(row.stock_qty || 0), minimum:Number(row.min_stock || 0), category:''}))
+    }))
+  }
+
   async function save() {
     if (!can(page, editing ? 'edit' : 'create')) { alert('Ação não autorizada.'); return }
 
@@ -450,7 +509,7 @@ function App() {
       if (form.vehicle_mode === 'new' && (!form.new_vehicle_plate?.trim() || !form.new_vehicle_model?.trim())) { alert('Informe placa e modelo do novo veículo.'); return }
       if (form.vehicle_mode === 'existing' && form.vehicle_id && !data.vehicles.some(v => v.id === form.vehicle_id && (!v.customer_id || v.customer_id === form.customer_id))) { alert('Veículo inválido para o cliente.'); return }
       if (!['pix', 'cash', 'debit', 'credit'].includes(form.method || '')) { alert('Selecione uma forma de pagamento válida.'); return }
-      if (form.method === 'credit' && (!Number.isInteger(Number(form.installments)) || Number(form.installments) < 1 || Number(form.installments) > 24)) { alert('Selecione de 1 a 24 parcelas.'); return }
+      if (form.method === 'credit' && (!Number.isInteger(Number(form.installments)) || Number(form.installments) < 1 || Number(form.installments) > 12)) { alert('Selecione de 1 a 12 parcelas.'); return }
     }
 
     if (page === 'customers') {
@@ -631,26 +690,36 @@ function App() {
       if (page === 'cash_entries' && editing && isAutomaticCash((data.cash_entries || []).find(x => x.id === editing) || {id:editing})) { alert('Lançamentos automáticos não podem ser editados diretamente.'); return }
       if (page === 'sales' && editing) { alert('Edição de venda exige estorno transacional e será habilitada após a validação do fluxo.'); return }
       const amount = page === 'sales' && saleItems.length ? saleItemTotal - Number(form.discount || 0) : Number(form.amount || 0)
+      if (page === 'sales' && form.method === 'credit' && cardRates[Number(form.installments||1)] === undefined) { alert('Taxa nao configurada para o parcelamento escolhido.'); return }
       if (!(amount > 0) || !Number.isFinite(amount)) { alert('Informe um valor maior que zero.'); return }
       setSaving(true)
       try {
         if (page === 'sales') {
           // Itens do catálogo usam a RPC transacional que também baixa estoque.
           if (saleItems.length) {
-            const { error: itemError } = await supabase.rpc('ap_sale_with_items', {
+            const { error: itemError } = await supabase.rpc('ap_sale_with_items_card_v2', {
               p_org:orgId, p_items:saleItems, p_method:form.method,
               p_customer:form.customer_id || null,
               p_vehicle:form.vehicle_mode==='existing' ? form.vehicle_id || null : null,
-              p_discount:Number(form.discount || 0)
+              p_discount:Number(form.discount || 0),
+              p_installments:form.method==='credit'?Number(form.installments):1
             })
             if (itemError) throw itemError
-            window.location.reload()
+            setModal(false)
+            setPage('sales')
+            setSearch('')
+            try { await refreshAfterSale(orgId) }
+            catch (refreshError) { console.error('Venda salva; falha na atualização:', refreshError); alert('Venda salva, mas não foi possível atualizar todos os dados. Reabra a tela para consultar.'); return }
+            alert('Venda registrada com sucesso!')
             return
           }
           // RPC legada: venda avulsa, cliente e veículo novos.
-          const { error } = await supabase.rpc('ap_register_sale_with_customer_vehicle', {
+          const { error } = await supabase.rpc('ap_register_sale_card_v2', {
             p_org: orgId, p_description: form.description.trim(), p_amount: amount,
-            p_cost: Number(form.cost || 0), p_method: form.method, p_date: form.date || today(),
+            p_cost: Number(form.cost || 0),
+            p_method: form.method,
+            p_installments:form.method==='credit'?Number(form.installments):1,
+p_date: form.date || today(),
             p_customer_id: form.customer_mode === 'new' ? null : form.customer_id || null,
             p_new_customer_name: form.customer_mode === 'new' ? form.new_customer_name?.trim() : null,
             p_new_customer_phone: form.customer_mode === 'new' ? form.new_customer_phone?.trim() || null : null,
@@ -663,19 +732,12 @@ function App() {
             p_new_vehicle_year: form.vehicle_mode === 'new' && form.new_vehicle_year ? Number(form.new_vehicle_year) : null
           })
           if (error) throw error
-          const [sr, ir, pr] = await Promise.all([
-            supabase.from('sales').select('*').eq('organization_id',orgId),
-            supabase.from('sale_items').select('*').eq('organization_id',orgId),
-            supabase.from('payments').select('*').eq('organization_id',orgId)
-          ])
-          if (sr.error || ir.error || pr.error) throw (sr.error || ir.error || pr.error)
-          setData(old => ({ ...old, sales: (sr.data || []).map(s => {
-            const item = (ir.data || []).find(i => i.sale_id === s.id)
-            const payment = (pr.data || []).find(p => p.sale_id === s.id)
-            return { id:s.id, description:item?.description || 'Venda', customer_id:s.customer_id || '', vehicle_id:s.vehicle_id || '', amount:Number(payment?.amount ?? s.total ?? 0), cost:Number(item?.unit_cost || 0), method:payment?.method || '', date:String(payment?.paid_at || s.created_at || '').slice(0,10), installments:1, created_at:s.created_at || '' }
-          }) }))
-          // Reload from Supabase so new customer and vehicle appear in their modules.
-          window.location.reload()
+          setModal(false)
+          setPage('sales')
+          setSearch('')
+          try { await refreshAfterSale(orgId) }
+          catch (refreshError) { console.error('Venda salva; falha na atualização:', refreshError); alert('Venda salva, mas não foi possível atualizar todos os dados. Reabra a tela para consultar.'); return }
+          alert('Venda registrada com sucesso!')
         } else {
           const payload = page === 'expenses' ? {
             organization_id:orgId, description:form.description.trim(), category:form.category || null,
@@ -701,7 +763,18 @@ const { data: saved, error } = await q.select('*').single()
           setData(old => ({ ...old, [page]: editing ? old[page].map(x => x.id === editing ? row : x) : [row,...old[page]] }))
         }
         setModal(false)
-      } catch (e) { alert('Erro ao salvar no Supabase: ' + (e instanceof Error ? e.message : String(e))) }
+      } catch (e: unknown) {
+  console.error('Erro ao salvar venda:', e)
+
+  const erro =
+    e && typeof e === 'object' && 'message' in e
+      ? String(e.message)
+      : typeof e === 'string'
+        ? e
+        : JSON.stringify(e)
+
+  alert('Erro ao salvar a venda: ' + erro)
+}
       finally { setSaving(false) }
       return
     }
@@ -875,7 +948,7 @@ const { data: saved, error } = await q.select('*').single()
         </> : page === 'inventory' ? (orgId ? <><div className="page-heading"><div><h1>Controle de estoque</h1><p>Controle por local, entradas, saídas e transferências</p></div></div><InventoryPanel orgId={orgId} products={data.products.map((p) => ({
   ...p,
   name: String(p.label || p.name || 'Produto sem nome').trim()
-}))} onUpdated={() => {}}/></> : null) : page === 'hr' ? (orgId ? <HRManager orgId={orgId} /> : <div className="notice">Empresa não identificada.</div>) : page === 'settings' ? <><div className="page-heading"><div><div className="eyebrow">PREFERÊNCIAS</div><h1>Configurações</h1><p>Personalize a identificação deste ambiente local.</p></div></div><div className="panel settings-panel"><label>Nome da loja<input value={shopName} onChange={e => setShopName(e.target.value)} placeholder="Nome da empresa"/></label><p>O nome é salvo automaticamente neste navegador. As permissões dos funcionários são salvas no Supabase. O nome exibido aqui continua local a este navegador.</p><div className="notice"><BadgeCheck size={17}/> Não use esta prévia com dados reais ou sensíveis antes da autenticação e validação das políticas RLS.</div></div></> : <>
+}))} onUpdated={() => {}}/></> : null) : page === 'hr' ? (orgId ? <HRManager orgId={orgId} /> : <div className="notice">Empresa não identificada.</div>) : page === 'settings' ? <><div className="page-heading"><div><div className="eyebrow">PREFERÊNCIAS</div><h1>Configurações</h1><p>Personalize a identificação deste ambiente local.</p></div></div><div className="panel settings-panel"><label>Nome da loja<input value={shopName} onChange={e => setShopName(e.target.value)} placeholder="Nome da empresa"/></label><p>O nome é salvo automaticamente neste navegador. As permissões dos funcionários são salvas no Supabase. O nome exibido aqui continua local a este navegador.</p><div className="notice"><BadgeCheck size={17}/> Não use esta prévia com dados reais ou sensíveis antes da autenticação e validação das políticas RLS.</div></div><div className="panel settings-panel" style={{marginTop:16}}><h3>Taxas do cartão de crédito (TESTE)</h3><p>Percentuais fictícios por parcela. Atualize com a tabela real antes de utilizar em vendas.</p><div className="form-grid">{Array.from({length:12},(_,i)=>i+1).map(n=><label key={n}>{n}x — acréscimo (%)<input type="number" min="0" max="100" step="0.01" value={cardRates[n]??''} onChange={e=>setCardRates(old=>({...old,[n]:Number(e.target.value)}))}/></label>)}</div><button className="primary-btn" disabled={rateSaving||!orgId} onClick={async()=>{if(!orgId)return;setRateSaving(true);try{const rows=Array.from({length:12},(_,i)=>({organization_id:orgId,installments:i+1,rate_percent:cardRates[i+1]}));if(rows.some(r=>r.rate_percent===undefined||!Number.isFinite(r.rate_percent)||r.rate_percent<0||r.rate_percent>100))throw Error('Preencha taxas validas de 1x a 12x');const {error}=await supabase.from('ap_card_rates').upsert(rows,{onConflict:'organization_id,installments'});if(error)throw error;alert('Taxas atualizadas no Supabase.');}catch(e){alert('Erro ao salvar taxas: '+(e instanceof Error?e.message:String(e)))}finally{setRateSaving(false)}}}>{rateSaving?'Salvando…':'Salvar tabela de taxas'}</button></div></> : <>
 
           <div className="page-heading"><div><div className="eyebrow">AUTO PERFORMANCE / {page.toUpperCase()}</div><h1>{config[page].title}</h1><p>{config[page].subtitle}</p></div><div className="heading-actions"><button className="outline-btn" onClick={exportCsv}><Download size={17}/> Exportar CSV</button><button className="primary-btn" onClick={openNew} disabled={!can(page, 'create') || (page === 'customers' && (customerLoading || !!customerError)) || (['sales','expenses','cash_entries','goals'].includes(page) && !!financeErrors[page]) || (page === 'vehicles' && (vehicleLoading || !!vehicleError)) || (['quotes','work_orders'].includes(page) && (operationLoading || !!operationErrors[page]))}><Plus size={17}/> Novo registro</button></div></div>
 
@@ -965,7 +1038,7 @@ const { data: saved, error } = await q.select('*').single()
       </section>}
       {page === 'products' && editing && <p className="ap-stock-hint">A quantidade é controlada exclusivamente em Controle de estoque. Alterações aqui não modificam o saldo.</p>}
       {page === 'expenses' && <div className="ap-expense-options"><label>Situação da despesa<select className="select" value={form.status || 'paid'} onChange={e=>setForm(old=>({...old,status:e.target.value}))}><option value="paid">Paga — movimentar o caixa</option><option value="pending">Pendente — não movimentar o caixa</option></select></label>{form.status !== 'pending' && <label>Forma de pagamento<select className="select" value={form.payment_method || 'pix'} onChange={e=>setForm(old=>({...old,payment_method:e.target.value}))}><option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Débito</option><option value="credit">Crédito</option><option value="transfer">Transferência</option><option value="other">Outro</option></select></label>}</div>}
-      <div className="form-grid">{config[page].fields.filter(f => !(page === 'products' && editing && f.key === 'quantity') && !(page === 'sales' && (f.key === 'customer_id' || f.key === 'vehicle_id' || (saleItems.length>0 && ['description','amount','cost'].includes(f.key)) || (f.key === 'installments' && form.method !== 'credit')))).map(f => <label key={f.key}>{f.label}{f.required && <span className="required"> *</span>}{(['vehicles','quotes','work_orders'].includes(page) && f.key === 'customer_id') ? <select className="select" value={form.customer_id || ''} onChange={e => setForm(old => ({ ...old, customer_id: e.target.value, vehicle_id: '', quote_id: '' }))}><option value="">{page === 'vehicles' ? 'Sem proprietário' : 'Selecione o cliente'}</option>{data.customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select> : (['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id') ? <select className="select" value={form.vehicle_id || ''} onChange={e => setForm(old => ({ ...old, vehicle_id: e.target.value }))}><option value="">Sem veículo</option>{data.vehicles.filter(v => !v.customer_id || v.customer_id === form.customer_id).map(v => <option key={v.id} value={v.id}>{v.plate || v.model || v.id.slice(0,8)}</option>)}</select> : (page === 'work_orders' && f.key === 'quote_id') ? <select className="select" value={form.quote_id || ''} onChange={e => setForm(old => ({ ...old, quote_id: e.target.value }))}><option value="">Sem orçamento</option>{data.quotes.filter(q => q.status === 'approved' && q.customer_id === form.customer_id).map(q => <option key={q.id} value={q.id}>Orçamento {q.id.slice(0,8)} · {currency(number(q.amount))}</option>)}</select> : (page === 'quotes' && f.key === 'item_type') ? <select className="select" value={form.item_type || 'service'} onChange={e => setForm(old => ({ ...old, item_type: e.target.value, item_id: '', unit_price: '' }))}><option value="service">Serviço</option><option value="product">Produto</option></select> : (page === 'quotes' && f.key === 'item_id') ? <select className="select" value={form.item_id || ''} onChange={e => { const item = (form.item_type === 'product' ? data.products : data.services).find(i => i.id === e.target.value); setForm(old => ({ ...old, item_id: e.target.value, unit_price: item ? String(item.price || 0) : '' })) }}><option value="">Sem item</option>{(form.item_type === 'product' ? data.products : data.services).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select> : (['quotes','work_orders'].includes(page) && f.key === 'status') ? <select className="select" value={form.status || (page === 'quotes' ? 'open' : 'waiting')} onChange={e => setForm(old => ({ ...old, status: e.target.value }))}>{(page === 'quotes' ? [['open','Aberto'],['approved','Aprovado'],['rejected','Recusado']] : [['waiting','Aguardando'],['in_progress','Em andamento'],['finished','Concluída'],['delivered','Entregue'],['cancelled','Cancelada']]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select> : (page === 'cash_entries' && f.key === 'kind') ? <select className="select" value={form.kind || 'income'} onChange={e => setForm(old => ({...old,kind:e.target.value}))}><option value="income">Entrada — dinheiro recebido</option><option value="expense">Saída — dinheiro pago</option></select> : (page === 'sales' && f.key === 'method') ? <select className="select" value={['pix','cash','debit','credit'].includes(form.method || '') ? form.method : form.method ? 'legacy' : ''} onChange={e => setForm(old => ({ ...old, method: e.target.value, installments: '1' }))} required><option value="" disabled>Selecione a forma de pagamento</option>{form.method && !['pix','cash','debit','credit'].includes(form.method) && <option value="legacy" disabled>Anterior: {form.method} — selecione uma opção</option>}<option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select> : (page === 'sales' && f.key === 'installments') ? <><select className="select" value={form.installments || '1'} onChange={e => setForm(old => ({ ...old, installments: e.target.value }))}>{Array.from({ length: 24 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}x</option>)}</select><small style={{ display: 'block', marginTop: 6, opacity: .8 }}>Valor por parcela: {currency(number(form.amount) / Math.max(1, Number(form.installments || 1)))} (sem juros)</small></> : <input type={f.type || 'text'} step={f.type === 'number' ? 'any' : undefined} min={f.type === 'number' ? '0' : undefined} value={form[f.key] || ''} onChange={e => setForm(old => ({ ...old, [f.key]: e.target.value }))} required={f.required}/>}</label>)}</div><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setModal(false)}>Cancelar</button><button type="submit" className="primary-btn" disabled={saving}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Cadastrar'}</button></div></form></div></div>}
+      <div className="form-grid">{config[page].fields.filter(f => !(page === 'products' && editing && f.key === 'quantity') && !(page === 'sales' && (f.key === 'customer_id' || f.key === 'vehicle_id' || (saleItems.length>0 && ['description','amount','cost'].includes(f.key)) || (f.key === 'installments' && form.method !== 'credit')))).map(f => <label key={f.key}>{f.label}{f.required && <span className="required"> *</span>}{(['vehicles','quotes','work_orders'].includes(page) && f.key === 'customer_id') ? <select className="select" value={form.customer_id || ''} onChange={e => setForm(old => ({ ...old, customer_id: e.target.value, vehicle_id: '', quote_id: '' }))}><option value="">{page === 'vehicles' ? 'Sem proprietário' : 'Selecione o cliente'}</option>{data.customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select> : (['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id') ? <select className="select" value={form.vehicle_id || ''} onChange={e => setForm(old => ({ ...old, vehicle_id: e.target.value }))}><option value="">Sem veículo</option>{data.vehicles.filter(v => !v.customer_id || v.customer_id === form.customer_id).map(v => <option key={v.id} value={v.id}>{v.plate || v.model || v.id.slice(0,8)}</option>)}</select> : (page === 'work_orders' && f.key === 'quote_id') ? <select className="select" value={form.quote_id || ''} onChange={e => setForm(old => ({ ...old, quote_id: e.target.value }))}><option value="">Sem orçamento</option>{data.quotes.filter(q => q.status === 'approved' && q.customer_id === form.customer_id).map(q => <option key={q.id} value={q.id}>Orçamento {q.id.slice(0,8)} · {currency(number(q.amount))}</option>)}</select> : (page === 'quotes' && f.key === 'item_type') ? <select className="select" value={form.item_type || 'service'} onChange={e => setForm(old => ({ ...old, item_type: e.target.value, item_id: '', unit_price: '' }))}><option value="service">Serviço</option><option value="product">Produto</option></select> : (page === 'quotes' && f.key === 'item_id') ? <select className="select" value={form.item_id || ''} onChange={e => { const item = (form.item_type === 'product' ? data.products : data.services).find(i => i.id === e.target.value); setForm(old => ({ ...old, item_id: e.target.value, unit_price: item ? String(item.price || 0) : '' })) }}><option value="">Sem item</option>{(form.item_type === 'product' ? data.products : data.services).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select> : (['quotes','work_orders'].includes(page) && f.key === 'status') ? <select className="select" value={form.status || (page === 'quotes' ? 'open' : 'waiting')} onChange={e => setForm(old => ({ ...old, status: e.target.value }))}>{(page === 'quotes' ? [['open','Aberto'],['approved','Aprovado'],['rejected','Recusado']] : [['waiting','Aguardando'],['in_progress','Em andamento'],['finished','Concluída'],['delivered','Entregue'],['cancelled','Cancelada']]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select> : (page === 'cash_entries' && f.key === 'kind') ? <select className="select" value={form.kind || 'income'} onChange={e => setForm(old => ({...old,kind:e.target.value}))}><option value="income">Entrada — dinheiro recebido</option><option value="expense">Saída — dinheiro pago</option></select> : (page === 'sales' && f.key === 'method') ? <select className="select" value={['pix','cash','debit','credit'].includes(form.method || '') ? form.method : form.method ? 'legacy' : ''} onChange={e => setForm(old => ({ ...old, method: e.target.value, installments: '1' }))} required><option value="" disabled>Selecione a forma de pagamento</option>{form.method && !['pix','cash','debit','credit'].includes(form.method) && <option value="legacy" disabled>Anterior: {form.method} — selecione uma opção</option>}<option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select> : (page === 'sales' && f.key === 'installments') ? <><select className="select" value={form.installments || '1'} onChange={e => setForm(old => ({ ...old, installments: e.target.value }))}>{Array.from({ length: 12 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}x — {cardRates[n]===undefined?'taxa não configurada':cardRates[n]+'%'}</option>)}</select><small style={{ display: 'block', marginTop: 6, opacity: .8 }}>Acréscimo: {currency(Math.round((saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount))*(cardRates[Number(form.installments||1)]||0))/100)} · Total: {currency(Math.round((saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount))*(1+(cardRates[Number(form.installments||1)]||0)/100)*100)/100)} · Parcela aproximada: {currency((Math.round((saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount))*(1+(cardRates[Number(form.installments||1)]||0)/100)*100)/100)/Math.max(1,Number(form.installments||1)))}</small></> : <input type={f.type || 'text'} step={f.type === 'number' ? 'any' : undefined} min={f.type === 'number' ? '0' : undefined} value={form[f.key] || ''} onChange={e => setForm(old => ({ ...old, [f.key]: e.target.value }))} required={f.required}/>}</label>)}</div><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setModal(false)}>Cancelar</button><button type="submit" className="primary-btn" disabled={saving}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Cadastrar'}</button></div></form></div></div>}
 
   </div>
 
