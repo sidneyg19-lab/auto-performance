@@ -240,7 +240,7 @@ export default function InventoryPanel({
       <div className="panel-head">
         <div>
           <h3>Controle de estoques</h3>
-          <p>Locais, saldos e movimentações auditáveis no Supabase</p>
+          <p>Acompanhe os saldos por local e o histórico de movimentações</p>
         </div>
       </div>
 
@@ -316,6 +316,7 @@ export default function InventoryPanel({
                   ))}
                   <th>Total</th>
                   <th>Mínimo</th>
+                  <th>Situação</th>
                 </tr>
               </thead>
 
@@ -336,6 +337,7 @@ export default function InventoryPanel({
 
                     <td>{total(p.id)}</td>
                     <td>{p.minimum ?? 0}</td>
+                    <td>{total(p.id) <= 0 ? 'Sem estoque' : Number(p.minimum || 0) > 0 && total(p.id) <= Number(p.minimum) ? 'Estoque baixo' : 'Normal'}</td>
                   </tr>
                 ))}
               </tbody>
