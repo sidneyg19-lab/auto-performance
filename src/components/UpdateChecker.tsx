@@ -63,7 +63,7 @@ export default function UpdateChecker() {
         boxShadow: '0 12px 40px rgba(0,0,0,.25)',
       }}
     >
-      <strong>Nova versão disponível</strong>
+      <strong>Atualização do Auto Performance</strong>
 
       <p style={{ fontSize: 14, lineHeight: 1.5 }}>
         O Auto Performance recebeu melhorias.
