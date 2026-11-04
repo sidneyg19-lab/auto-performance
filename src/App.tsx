@@ -512,10 +512,10 @@ function App() {
   function printQuote(r:RecordItem){const popup=window.open('','_blank');if(!popup){alert('Permita pop-ups para salvar PDF');return}popup.document.write(quoteHtml(r));popup.document.close();popup.focus();popup.print()}
   // Gera um PDF real a partir de canvas, preservando acentos sem bibliotecas externas.
   // Cada página é uma imagem JPEG dentro de um PDF A4 válido.
-  function quotePdf(r:RecordItem):Blob {
+  function quotePdf(r:RecordItem, pdfData?: {title:string;items:{name:string;quantity:number;price:number}[];notes:string;total:number;discount:number}):Blob {
     const customer=data.customers.find(c=>c.id===r.customer_id)
     const vehicle=data.vehicles.find(v=>v.id===r.vehicle_id)
-    const items=JSON.parse(String(r.items||'[]')) as {type:'product'|'service';id:string;quantity:number;price:number}[]
+    const items=pdfData?.items || (JSON.parse(String(r.items||'[]')) as {type:'product'|'service';id:string;quantity:number;price:number}[]).map(i=>({...i,name:String((i.type==='product'?data.products:data.services).find(x=>x.id===i.id)?.name||'Item')}))
     const width=1240, height=1754, margin=76, right=width-margin
     const pages:Uint8Array[]=[]
     const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height
@@ -543,7 +543,7 @@ let y = 0
       ctx.fillStyle='#ffffff';ctx.fillRect(0,0,width,height)
       ctx.fillStyle='#263c74';ctx.fillRect(0,0,width,12)
       y=104
-      textLine(`${shopName} — Orçamento`,margin,y,37,true,'#263c74');y+=58
+      textLine(`${shopName} — ${pdfData?.title || 'Orçamento'}`,margin,y,37,true,'#263c74');y+=58
       textLine(`Nº ${r.id.slice(0,8)}  •  Emissão: ${new Date(r.created_at||Date.now()).toLocaleDateString('pt-BR')}`,margin,y,23);y+=44
       for(const line of wrap(`Cliente: ${customer?.name||'Não informado'}  •  Veículo: ${vehicle?.plate||'Não informado'}`,right-margin,23)){textLine(line,margin,y,23);y+=34}
       y+=30
@@ -559,8 +559,7 @@ let y = 0
     }
     addPage()
     for(const item of items){
-      const name=(item.type==='product'?data.products:data.services).find(x=>x.id===item.id)?.name||'Item'
-      const lines=wrap(String(name),600,23)
+      const lines=wrap(item.name,600,23)
       const rowHeight=Math.max(57,lines.length*32+24)
       if(y+rowHeight>height-270){finishPage();addPage()}
       ctx.strokeStyle='#ccd3e0';ctx.strokeRect(margin,y,right-margin,rowHeight)
@@ -571,11 +570,11 @@ let y = 0
       y+=rowHeight
     }
     if(y>height-350){finishPage();addPage()}
-    y+=55;textLine(`Desconto: ${currency(Number(r.discount||0))}`,margin,y,24);y+=54
-    textLine(`Total: ${currency(Number(r.amount||0))}`,right-440,y,32,true,'#263c74');y+=60
-    for(const line of wrap(String(r.notes||''),right-margin,23)){if(y>height-140){finishPage();addPage()}textLine(line,margin,y,23);y+=35}
+    y+=55;textLine(`Desconto: ${currency(pdfData?.discount ?? Number(r.discount||0))}`,margin,y,24);y+=54
+    textLine(`Total: ${currency(pdfData?.total ?? Number(r.amount||0))}`,right-440,y,32,true,'#263c74');y+=60
+    for(const line of wrap(pdfData?.notes ?? String(r.notes||''),right-margin,23)){if(y>height-140){finishPage();addPage()}textLine(line,margin,y,23);y+=35}
     y+=30
-    textLine('Proposta sujeita à aprovação do cliente. Não substitui nota fiscal.',margin,y,21)
+    textLine(pdfData ? 'Documento informativo. Não substitui nota fiscal.' : 'Proposta sujeita à aprovação do cliente. Não substitui nota fiscal.',margin,y,21)
     finishPage()
     // PDF A4 com imagens JPEG embutidas e tabela de referências cruzadas.
     const encoder=new TextEncoder(), chunks:Uint8Array[]=[], offsets:number[]=[0]
@@ -624,6 +623,75 @@ let y = 0
       alert(`O PDF ${filename} foi baixado. No WhatsApp, clique no clipe (Anexar) e selecione esse arquivo na pasta Downloads.`)
     }catch(error){whatsapp?.close();alert(`Não foi possível preparar o PDF: ${error instanceof Error?error.message:String(error)}`)}
   }
+  // PDF de vendas e OS: usa o mesmo gerador A4 dos orçamentos, com os dados reais já carregados.
+  function operationDocument(kind:'sales'|'work_orders', record:RecordItem) {
+    const vehicle=data.vehicles.find(v=>v.id===record.vehicle_id)
+    const vehicleText=vehicle ? [vehicle.brand,vehicle.model,vehicle.plate].filter(Boolean).join(' · ') : 'Não vinculado'
+    const title=kind==='sales'?'Comprovante de venda':'Ordem de serviço'
+    const items=kind==='sales'
+      ? saleItemRows.filter(i=>i.sale_id===record.id).map(i=>({
+          name:String(i.item_type==='product' ? data.products.find(p=>p.id===i.product_id)?.name||'Produto' : data.services.find(p=>p.id===i.service_id)?.name||'Serviço'),
+          quantity:Number(i.quantity||1),price:Number(i.unit_price||0)
+        }))
+      : (()=>{
+          const quote=data.quotes.find(q=>q.id===record.quote_id)
+          if(!quote)return []
+          try{return (JSON.parse(String(quote.items||'[]')) as {type:'product'|'service';id:string;quantity:number;price:number}[]).map(i=>({
+            name:String((i.type==='product'?data.products:data.services).find(p=>p.id===i.id)?.name||'Item'),quantity:Number(i.quantity||1),price:Number(i.price||0)
+          }))}catch{return []}
+        })()
+    const relatedQuote=kind==='work_orders'?data.quotes.find(q=>q.id===record.quote_id):null
+    const total=kind==='sales'?Number(record.amount||0):Number(relatedQuote?.amount||0)
+    const discount=kind==='work_orders'?Number(relatedQuote?.discount||0):0
+    const details=[`Situação: ${statusLabel(String(record.status||''))}`,`Veículo: ${vehicleText}`]
+    if(kind==='sales'){
+      details.push(`Descrição: ${String(record.description||'Venda')}`)
+      if(record.method)details.push(`Pagamento: ${String(record.method)}`)
+      if(record.date)details.push(`Data: ${String(record.date)}`)
+    }else{
+      details.push(`Técnico: ${String(record.technician||'Não informado')}`)
+      if(record.notes)details.push(`Serviço/observações: ${String(record.notes)}`)
+      if(!relatedQuote)details.push('Sem orçamento vinculado: valores não informados')
+    }
+    if(!items.length)items.push({name:kind==='sales'?String(record.description||'Venda'):'Serviço descrito nas observações',quantity:1,price:total})
+    return {title,items,notes:details.join('\n'),total,discount}
+  }
+
+  function downloadOperationPdf(kind:'sales'|'work_orders',record:RecordItem) {
+    const filename=`${kind==='sales'?'venda':'os'}-${record.id.slice(0,8)}.pdf`
+    const blob=quotePdf(record,operationDocument(kind,record))
+    const url=URL.createObjectURL(blob),link=document.createElement('a')
+    link.href=url;link.download=filename;document.body.appendChild(link);link.click();link.remove()
+    setTimeout(()=>URL.revokeObjectURL(url),60000)
+  }
+
+  async function shareOperationPdf(kind:'sales'|'work_orders',record:RecordItem) {
+    const customer=data.customers.find(c=>c.id===record.customer_id)
+    if(!customer){alert('Vincule um cliente antes de compartilhar.');return}
+    const raw=String(customer.phone||'').replace(/\D/g,'')
+    const phone=raw.startsWith('55')&&(raw.length===12||raw.length===13)?raw:(raw.length===10||raw.length===11?`55${raw}`:'')
+    if(!phone){alert('Cadastre um telefone com DDD válido no cliente.');return}
+    const filename=`${kind==='sales'?'venda':'os'}-${record.id.slice(0,8)}.pdf`
+    const message=`Olá, ${customer.name}! Segue ${kind==='sales'?'o comprovante da venda':'a ordem de serviço'} ${record.id.slice(0,8)} da ${shopName}.`
+    const popup=window.open('about:blank','_blank')
+    try{
+      const blob=quotePdf(record,operationDocument(kind,record))
+      const file=new File([blob],filename,{type:'application/pdf'})
+      if(navigator.share&&navigator.canShare?.({files:[file]})){
+        popup?.close()
+        try{await navigator.share({files:[file],title:filename,text:message});return}
+        catch(error){if((error as Error)?.name==='AbortError')return}
+      }
+      const url=URL.createObjectURL(blob),link=document.createElement('a')
+      link.href=url;link.download=filename;document.body.appendChild(link);link.click();link.remove()
+      setTimeout(()=>URL.revokeObjectURL(url),60000)
+      const target=`https://wa.me/${phone}?text=${encodeURIComponent(message)}`
+      if(popup)popup.location.href=target
+      else window.open(target,'_blank','noopener,noreferrer')
+      alert(`O PDF ${filename} foi baixado. Anexe-o manualmente na conversa do WhatsApp.`)
+    }catch(error){popup?.close();alert('Falha ao preparar PDF: '+(error instanceof Error?error.message:String(error)))}
+  }
+
   function shareOperationWhatsApp(kind: 'sales' | 'work_orders', record: RecordItem) {
     const customer = data.customers.find(c => c.id === record.customer_id)
     if (!customer) { alert('Este registro não possui cliente cadastrado. Vincule um cliente antes de compartilhar.'); return }
@@ -1254,6 +1322,8 @@ const { data: saved, error } = await q.select('*').single()
 
           {['quotes','work_orders'].includes(page) && (operationLoading || operationErrors[page]) && <div className="notice">{operationLoading ? 'Carregando operações…' : operationErrors[page]}</div>}
           <section className="panel table-panel"><div className="table-tools"><h3>Registros</h3><div className="search-box"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar registros..."/></div></div><div className="table-scroll"><table><thead><tr>{config[page].fields.slice(0,5).map(f => <th key={f.key}>{f.label}</th>)}<th>Ações</th></tr></thead><tbody>{visibleRows.map(r => <tr key={r.id}>{config[page].fields.slice(0,5).map(f => <td key={f.key}>{['amount','price','cost'].includes(f.key) && !(page === 'cash_entries' && f.key === 'amount') ? currency(number(r[f.key])) : ['vehicles','sales'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || (r.customer_id ? 'Cliente não encontrado' : 'Sem proprietário')) : ['quotes','work_orders'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || '—') : ['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id' ? (data.vehicles.find(v => v.id === r.vehicle_id)?.plate || '—') : f.key === 'item_id' ? ([...data.products,...data.services].find(i => i.id === r.item_id)?.name || '—') : f.key === 'item_type' ? (r.item_type === 'product' ? 'Produto' : r.item_type === 'service' ? 'Serviço' : '—') : page === 'cash_entries' && f.key === 'kind' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '↙' : '↗'} {cashTypeLabel(String(r.kind || ''))}</span> : page === 'cash_entries' && f.key === 'amount' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '+' : '−'} {currency(number(r.amount))}</span> : page === 'cash_entries' && f.key === 'description' ? <>{String(r.description || '').startsWith('Recebimento de venda') ? 'Recebimento de venda' : String(r.description || '')}{isAutomaticCash(r) && <small className="ap-auto-label">Automático</small>}</> : page === 'work_orders' && f.key === 'quote_id' ? (r.quote_id ? `Orçamento ${String(r.quote_id).slice(0,8)}` : '—') : f.key === 'status' ? statusLabel(String(r.status || '')) : String(r[f.key] ?? '—')}</td>)}<td><div className="table-actions">{page==='quotes' && <button type="button" onClick={()=>printQuote(r)}>PDF / Imprimir</button>}{page==='quotes' && <button type="button" onClick={()=>shareQuote(r)}>WhatsApp</button>}
+          {(page === 'sales' || page === 'work_orders') && can(page, 'view') && <button type="button" onClick={() => downloadOperationPdf(page as 'sales' | 'work_orders', r)}>Baixar PDF</button>}
+          {(page === 'sales' || page === 'work_orders') && can(page, 'view') && <button type="button" onClick={() => void shareOperationPdf(page as 'sales' | 'work_orders', r)}>WhatsApp + PDF</button>}
           {(page === 'sales' || page === 'work_orders') && can(page, 'view') && <button type="button" onClick={() => shareOperationWhatsApp(page as 'sales' | 'work_orders', r)} title="Enviar informações para o WhatsApp do cliente">WhatsApp</button>}
           {page==='quotes' && can('quotes','edit') && can('work_orders','create') && ['draft','sent'].includes(String(r.status)) && <button type="button" onClick={()=>void approveQuote(r)}>Aprovar e gerar OS</button>}
           {page==='work_orders' && can('work_orders','edit') && can('sales','create') && r.status!=='cancelled' && r.status!=='delivered' && <button type="button" onClick={()=>void finishOs(r)}>{r.status==='finished'?'Abrir venda':'Concluir → Venda'}</button>}
