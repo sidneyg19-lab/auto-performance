@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 
 import { Activity, ArrowDownRight, ArrowUpRight, BadgeCheck, BarChart3, Boxes, CalendarDays, CarFront, ChevronDown, CircleDollarSign, ClipboardList, Download, Flame, Gauge, LayoutDashboard, Menu, Package, Plus, Search, Settings2, ShoppingCart, Target, Trash2, Truck, Users, Wallet, Wrench, X } from 'lucide-react'
 
@@ -140,6 +140,9 @@ function App() {
   const [vehicleError, setVehicleError] = useState('')
 
   const [saving, setSaving] = useState(false)
+  const [quickSaving, setQuickSaving] = useState(false)
+  const [quickCustomer, setQuickCustomer] = useState(false)
+  const [quickVehicle, setQuickVehicle] = useState(false)
   const [catalogErrors, setCatalogErrors] = useState<Record<string, string>>({})
   const [financeErrors, setFinanceErrors] = useState<Record<string,string>>({})
   const [operationLoading, setOperationLoading] = useState(true)
@@ -456,6 +459,7 @@ function App() {
   function navigate(p: string) { if (!can(p)) return; setPage(p); setSearch(''); setSidebar(false) }
 
   const [warrantyOrder, setWarrantyOrder] = useState<RecordItem | null>(null)
+  const [warrantySale, setWarrantySale] = useState<RecordItem | null>(null)
   const [celebrate] = useState(false)
 
   async function approveQuote(r:RecordItem){
@@ -620,7 +624,61 @@ let y = 0
       alert(`O PDF ${filename} foi baixado. No WhatsApp, clique no clipe (Anexar) e selecione esse arquivo na pasta Downloads.`)
     }catch(error){whatsapp?.close();alert(`Não foi possível preparar o PDF: ${error instanceof Error?error.message:String(error)}`)}
   }
-  function openNew() { if (!can(page, 'create')) return; setQuoteItems([]); setSaleItems([]); setPickId(''); setPickLocation(''); setPickQty('1'); setEditing(null); setForm(page === 'quotes' ? { status: 'draft', item_type: 'service', quantity: '1' } : page === 'work_orders' ? { status: 'waiting' } : page === 'sales' ? { date: today(), method: 'pix', installments: '1', card_brand: '', customer_mode: 'existing', vehicle_mode: 'none' } : page === 'expenses' ? { date: today(), status: 'paid', payment_method: 'pix' } : page === 'cash_entries' ? { date: today(), kind: 'income' } : page === 'goals' ? { month: today().slice(0, 7) } : {}); setModal(true) }
+  async function saveQuickCustomer() {
+    if (!orgId || !can('customers', 'create') || quickSaving) { alert('Sem permissão para cadastrar clientes.'); return }
+    const name = (form.new_customer_name || '').trim()
+    if (!name) { alert('Informe o nome do cliente.'); return }
+    setQuickSaving(true)
+    try {
+      const { data: saved, error } = await supabase.from('customers').insert({
+        organization_id: orgId, name, phone: form.new_customer_phone?.trim() || null,
+        email: form.new_customer_email?.trim() || null, document: form.new_customer_document?.trim() || null
+      }).select('id,name,phone,email,document,notes,created_at').single()
+      if (error || !saved) throw new Error(error?.message || 'Sem retorno do banco')
+      setData(old => ({ ...old, customers: [{ id:saved.id, name:saved.name, phone:saved.phone||'', email:saved.email||'', document:saved.document||'', notes:saved.notes||'', created_at:saved.created_at||'' }, ...old.customers] }))
+      setForm(old => ({ ...old, customer_id:saved.id, customer_mode:'existing', vehicle_id:'', vehicle_mode:'none', quote_id:'' }))
+      setQuickCustomer(false)
+    } catch (error) { alert('Cliente não cadastrado: ' + (error instanceof Error ? error.message : String(error))) }
+    finally { setQuickSaving(false) }
+  }
+
+  async function saveQuickVehicle() {
+    if (!orgId || !can('vehicles', 'create') || quickSaving) { alert('Sem permissão para cadastrar veículos.'); return }
+    const plate = (form.new_vehicle_plate || '').trim().toUpperCase()
+    const model = (form.new_vehicle_model || '').trim()
+    if (!plate || !model) { alert('Informe placa e modelo do veículo.'); return }
+    if (form.new_vehicle_year && (!Number.isInteger(Number(form.new_vehicle_year)) || Number(form.new_vehicle_year)<1900 || Number(form.new_vehicle_year)>2100)) { alert('Ano inválido.'); return }
+    setQuickSaving(true)
+    try {
+      const { data: saved, error } = await supabase.from('vehicles').insert({
+        organization_id:orgId, customer_id:form.customer_id || null, plate, model,
+        brand:form.new_vehicle_brand?.trim() || null,
+        model_year:form.new_vehicle_year ? Number(form.new_vehicle_year) : null
+      }).select('id,customer_id,plate,brand,model,model_year,color,notes,created_at').single()
+      if (error || !saved) throw new Error(error?.message || 'Sem retorno do banco')
+      setData(old => ({ ...old, vehicles:[{id:saved.id,customer_id:saved.customer_id||'',plate:saved.plate||'',brand:saved.brand||'',model:saved.model||'',model_year:saved.model_year||'',color:saved.color||'',notes:saved.notes||'',created_at:saved.created_at||''}, ...old.vehicles] }))
+      setForm(old => ({ ...old, vehicle_id:saved.id, vehicle_mode:'existing' }))
+      setQuickVehicle(false)
+    } catch (error) { alert('Veículo não cadastrado: ' + (error instanceof Error ? error.message : String(error))) }
+    finally { setQuickSaving(false) }
+  }
+
+  const quickCustomerFields = <div className="quick-sale-grid">
+    <label>Nome completo *<input value={form.new_customer_name||''} onChange={e=>setForm(old=>({...old,new_customer_name:e.target.value}))}/></label>
+    <label>Telefone<input value={form.new_customer_phone||''} onChange={e=>setForm(old=>({...old,new_customer_phone:e.target.value}))}/></label>
+    <label>CPF/CNPJ<input value={form.new_customer_document||''} onChange={e=>setForm(old=>({...old,new_customer_document:e.target.value}))}/></label>
+    <label>E-mail<input type="email" value={form.new_customer_email||''} onChange={e=>setForm(old=>({...old,new_customer_email:e.target.value}))}/></label>
+    <button type="button" className="primary-btn" disabled={quickSaving} onClick={()=>void saveQuickCustomer()}>{quickSaving?'Salvando…':'Salvar cliente e selecionar'}</button>
+  </div>
+  const quickVehicleFields = <div className="quick-sale-grid">
+    <label>Placa *<input maxLength={8} value={form.new_vehicle_plate||''} onChange={e=>setForm(old=>({...old,new_vehicle_plate:e.target.value.toUpperCase()}))}/></label>
+    <label>Marca<input value={form.new_vehicle_brand||''} onChange={e=>setForm(old=>({...old,new_vehicle_brand:e.target.value}))}/></label>
+    <label>Modelo *<input value={form.new_vehicle_model||''} onChange={e=>setForm(old=>({...old,new_vehicle_model:e.target.value}))}/></label>
+    <label>Ano<input type="number" min="1900" max="2100" value={form.new_vehicle_year||''} onChange={e=>setForm(old=>({...old,new_vehicle_year:e.target.value}))}/></label>
+    <button type="button" className="primary-btn" disabled={quickSaving} onClick={()=>void saveQuickVehicle()}>{quickSaving?'Salvando…':'Salvar veículo e selecionar'}</button>
+  </div>
+
+  function openNew() { if (!can(page, 'create')) return; setQuickCustomer(false); setQuickVehicle(false); setQuoteItems([]); setSaleItems([]); setPickId(''); setPickLocation(''); setPickQty('1'); setEditing(null); setForm(page === 'quotes' ? { status: 'draft', item_type: 'service', quantity: '1' } : page === 'work_orders' ? { status: 'waiting' } : page === 'sales' ? { date: today(), method: 'pix', installments: '1', card_brand: '', customer_mode: 'existing', vehicle_mode: 'none' } : page === 'expenses' ? { date: today(), status: 'paid', payment_method: 'pix' } : page === 'cash_entries' ? { date: today(), kind: 'income' } : page === 'goals' ? { month: today().slice(0, 7) } : {}); setModal(true) }
 
   function openEdit(row: RecordItem) { if (!can(page, 'edit')) return; if (page === 'quotes' && !['draft', 'sent'].includes(String(row.status))) { alert('Orçamentos aprovados ou encerrados são somente para consulta.'); return }; if (page === 'work_orders' && !['waiting', 'in_progress'].includes(String(row.status))) { alert('OS concluídas ou entregues não podem ser editadas diretamente.'); return }; if (page === 'sales' && (row.status !== 'draft' || Boolean(row.work_order_id))) { alert('Esta venda não pode ser editada diretamente. Utilize as ações próprias de recebimento ou cancelamento.'); return }; if(page==='quotes') {try{setQuoteItems(JSON.parse(String(row.items||'[]')))}catch{setQuoteItems([])}}; if(page==='products') { alert('Para alterar quantidades, use Controle de estoque. Os demais dados do produto podem ser editados.'); } setEditing(row.id); setForm(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v)]))); setModal(true) }
 
@@ -701,8 +759,8 @@ let y = 0
 
     if (fields.some(f => f.required && !(page === 'sales' && saleItems.length>0 && ['description','amount'].includes(f.key)) && !(page === 'sales' && f.key === 'installments') && !String(form[f.key] || '').trim())) { alert('Preencha os campos obrigatórios.'); return }
     if (page === 'sales') {
-      if (saleItems.length && form.customer_mode === 'new') { alert('Cadastre o novo cliente em Clientes antes da venda com itens.'); return }
-      if (saleItems.length && form.vehicle_mode === 'new') { alert('Cadastre o veículo em Veículos antes da venda com itens.'); return }
+      if (saleItems.length && form.customer_mode === 'new') { alert('Clique em Salvar cliente e selecionar antes de finalizar a venda.'); return }
+      if (saleItems.length && form.vehicle_mode === 'new') { alert('Clique em Salvar veículo e selecionar antes de finalizar a venda.'); return }
       if (form.customer_mode === 'new' && !form.new_customer_name?.trim()) { alert('Informe o nome do novo cliente.'); return }
       if (form.customer_mode !== 'new' && form.customer_id && !data.customers.some(c => c.id === form.customer_id)) { alert('Cliente inválido.'); return }
       if (form.vehicle_mode === 'new' && (!form.new_vehicle_plate?.trim() || !form.new_vehicle_model?.trim())) { alert('Informe placa e modelo do novo veículo.'); return }
@@ -1169,7 +1227,7 @@ const { data: saved, error } = await q.select('*').single()
           {page==='sales' && r.status==='draft' && can('sales','create') && <button type="button" onClick={()=>{setPaySale(r);setPayMethod('pix');setPayBrand('');setPayInstallments('1');setPayLocations({})}}>Receber</button>}
           {page==='sales' && r.status==='cancelled' && <small>Cancelada</small>}
           {page==='sales' && r.status==='draft' && can('sales','edit') && <button type="button" onClick={()=>void cancelOsSale(r)}>Cancelar pendente</button>}
-          {page === 'sales' && <button type="button" onClick={() => setSaleDetails(r)} title="Consultar detalhes da venda">Detalhes</button>}{can(page, 'edit') && !(page === 'quotes' && !['draft','sent'].includes(String(r.status))) && !(page === 'work_orders' && !['waiting','in_progress'].includes(String(r.status))) && !(page === 'sales' && (r.status !== 'draft' || Boolean(r.work_order_id))) && !(page === 'cash_entries' && isAutomaticCash(r)) && <button onClick={() => openEdit(r)} title="Editar">Editar</button>}{page === 'sales' && can('sales','edit') && trackedSales.includes(r.id) && r.status!=='cancelled' && <button type="button" onClick={()=>void cancelTrackedSale(r.id)}>Cancelar venda</button>}{page === 'work_orders' && can(page, 'edit') && r.status === 'delivered' && <button type="button" onClick={() => setWarrantyOrder(r)} title="Emitir termo de garantia">Garantia</button>}{can(page, 'delete') && page !== 'sales' && !(page === 'quotes' && !['draft','sent'].includes(String(r.status))) && !(page === 'work_orders' && (!['waiting','in_progress'].includes(String(r.status)) || data.sales.some(s => s.work_order_id === r.id))) && !(page === 'cash_entries' && isAutomaticCash(r)) && <button onClick={() => remove(r.id)} title="Excluir" className="delete-btn"><Trash2 size={16}/></button>}</div></td></tr>)}</tbody></table>{!visibleRows.length && <Empty text={search ? 'Nenhum registro corresponde à pesquisa.' : 'Nenhum registro cadastrado. Use “Novo registro” para começar.'}/>}</div></section>
+          {page === 'sales' && r.status !== 'draft' && r.status !== 'cancelled' && can('sales','view') && <button type="button" onClick={() => setWarrantySale(r)} title="Emitir termo de garantia">Garantia</button>}{page === 'sales' && <button type="button" onClick={() => setSaleDetails(r)} title="Consultar detalhes da venda">Detalhes</button>}{can(page, 'edit') && !(page === 'quotes' && !['draft','sent'].includes(String(r.status))) && !(page === 'work_orders' && !['waiting','in_progress'].includes(String(r.status))) && !(page === 'sales' && (r.status !== 'draft' || Boolean(r.work_order_id))) && !(page === 'cash_entries' && isAutomaticCash(r)) && <button onClick={() => openEdit(r)} title="Editar">Editar</button>}{page === 'sales' && can('sales','edit') && trackedSales.includes(r.id) && r.status!=='cancelled' && <button type="button" onClick={()=>void cancelTrackedSale(r.id)}>Cancelar venda</button>}{page === 'work_orders' && can(page, 'edit') && r.status === 'delivered' && <button type="button" onClick={() => setWarrantyOrder(r)} title="Emitir termo de garantia">Garantia</button>}{can(page, 'delete') && page !== 'sales' && !(page === 'quotes' && !['draft','sent'].includes(String(r.status))) && !(page === 'work_orders' && (!['waiting','in_progress'].includes(String(r.status)) || data.sales.some(s => s.work_order_id === r.id))) && !(page === 'cash_entries' && isAutomaticCash(r)) && <button onClick={() => remove(r.id)} title="Excluir" className="delete-btn"><Trash2 size={16}/></button>}</div></td></tr>)}</tbody></table>{!visibleRows.length && <Empty text={search ? 'Nenhum registro corresponde à pesquisa.' : 'Nenhum registro cadastrado. Use “Novo registro” para começar.'}/>}</div></section>
 
         </>}
 
@@ -1186,6 +1244,11 @@ const { data: saved, error } = await q.select('*').single()
       <p style={{marginTop:15}}>Total com taxas: <strong>{currency(Math.round(number(paySale.amount)*(1+((payMethod==='credit'?Number(cardRates[Number(payInstallments)]||0):payMethod==='debit'?2.99:0)+(['elo','amex'].includes(payBrand)?1:0))/100)*100)/100)}</strong></p>
       <div className="modal-actions"><button type="button" className="outline-btn" onClick={()=>setPaySale(null)}>Voltar</button><button type="button" className="primary-btn" disabled={saving||(['credit','debit'].includes(payMethod)&&!payBrand)} onClick={()=>void confirmOsPayment()}>{saving?'Processando…':'Confirmar pagamento'}</button></div></div></div>}
     {warrantyOrder && <WarrantyDialog organizationId={orgId||''} saleId={String(data.sales.find(x=>x.work_order_id===warrantyOrder.id)?.id||'')} orderId={warrantyOrder.id} customer={String(data.customers.find(c=>c.id===warrantyOrder.customer_id)?.name || 'Cliente não identificado')} vehicle={(()=>{const v=data.vehicles.find(v=>v.id===warrantyOrder.vehicle_id);return v ? [v.brand,v.model,v.plate].filter(Boolean).join(' · ') : 'Não informado'})()} technician={String(warrantyOrder.technician || '')} finishedAt={String(warrantyOrder.finished_at || '')} onClose={()=>setWarrantyOrder(null)}/>}
+    {warrantySale && (() => {
+      const order = data.work_orders.find(o => o.id === warrantySale.work_order_id)
+      const vehicle = data.vehicles.find(v => v.id === warrantySale.vehicle_id)
+      return <WarrantyDialog key={`sale-warranty-${warrantySale.id}`} organizationId={orgId||''} saleId={warrantySale.id} orderId={order?.id || ''} customer={String(data.customers.find(c=>c.id===warrantySale.customer_id)?.name || 'Cliente não identificado')} vehicle={vehicle ? [vehicle.brand,vehicle.model,vehicle.plate].filter(Boolean).join(' · ') : 'Não informado'} technician={String(order?.technician || '')} finishedAt={String(order?.finished_at || warrantySale.date || '')} onClose={()=>setWarrantySale(null)}/>
+    })()}
     {saleDetails && page === 'sales' && (() => {
       const sale = data.sales.find(r => r.id === saleDetails.id) || saleDetails
       const info = installmentDetails[sale.id]
@@ -1221,12 +1284,12 @@ const { data: saved, error } = await q.select('*').single()
             <option value="new">+ Cadastrar cliente nesta venda</option>
           </select>
         </label>
-        {form.customer_mode === 'new' ? <div className="quick-sale-grid">
+        {form.customer_mode === 'new' ? (saleItems.length ? quickCustomerFields : <div className="quick-sale-grid">
           <label>Nome completo *<input required value={form.new_customer_name || ''} onChange={e => setForm(old => ({ ...old, new_customer_name:e.target.value }))}/></label>
           <label>Telefone<input value={form.new_customer_phone || ''} onChange={e => setForm(old => ({ ...old, new_customer_phone:e.target.value }))}/></label>
           <label>CPF/CNPJ<input value={form.new_customer_document || ''} onChange={e => setForm(old => ({ ...old, new_customer_document:e.target.value }))}/></label>
           <label>E-mail<input type="email" value={form.new_customer_email || ''} onChange={e => setForm(old => ({ ...old, new_customer_email:e.target.value }))}/></label>
-        </div> : <label>Cliente existente
+        </div>) : <label>Cliente existente
           <select className="select" value={form.customer_id || ''} onChange={e => setForm(old => ({ ...old, customer_id:e.target.value, vehicle_id:'', vehicle_mode:'none' }))}>
             <option value="">Venda de balcão / sem cliente</option>
             {data.customers.map(c => <option key={c.id} value={c.id}>{c.name} {c.phone ? `· ${c.phone}` : ''}</option>)}
@@ -1246,13 +1309,13 @@ const { data: saved, error } = await q.select('*').single()
             {data.vehicles.filter(v => v.customer_id === form.customer_id).map(v => <option key={v.id} value={v.id}>{v.plate} · {v.brand} {v.model}</option>)}
           </select>
         </label>}
-        {form.vehicle_mode === 'new' && <div className="quick-sale-grid">
+        {form.vehicle_mode === 'new' && (saleItems.length ? quickVehicleFields : <div className="quick-sale-grid">
           <label>Placa *<input required maxLength={8} value={form.new_vehicle_plate || ''} onChange={e => setForm(old => ({ ...old, new_vehicle_plate:e.target.value.toUpperCase() }))}/></label>
           <label>Marca<input value={form.new_vehicle_brand || ''} onChange={e => setForm(old => ({ ...old, new_vehicle_brand:e.target.value }))}/></label>
           <label>Modelo *<input required value={form.new_vehicle_model || ''} onChange={e => setForm(old => ({ ...old, new_vehicle_model:e.target.value }))}/></label>
           <label>Ano<input type="number" min="1900" max="2100" value={form.new_vehicle_year || ''} onChange={e => setForm(old => ({ ...old, new_vehicle_year:e.target.value }))}/></label>
-        </div>}
-        <p>Cliente e veículo novos serão cadastrados automaticamente ao finalizar a venda.</p>
+        </div>)}
+        <p>{saleItems.length ? 'Para vendas com itens, salve e selecione os novos cadastros antes de finalizar.' : 'Cliente e veículo novos serão cadastrados automaticamente ao finalizar a venda.'}</p>
       </div>}
       {page === 'sales' && !editing && <section className="ap-sale-items">
         <h3>Produtos e serviços da venda</h3><p>Selecione itens cadastrados. A baixa de estoque ocorre somente ao finalizar a venda.</p>
@@ -1275,7 +1338,7 @@ const { data: saved, error } = await q.select('*').single()
           }}>+ Adicionar item</button>
         </div>
         {saleItems.map((item,i)=><div className="ap-sale-item" key={`${item.type}-${item.id}-${item.location_id||''}`}><span>{(item.type==='product'?data.products:data.services).find(p=>p.id===item.id)?.name||'Item'} · {item.quantity} × {currency(saleItemPrice({...item,quantity:1}))}</span><strong>{currency(saleItemPrice(item))}</strong><button type="button" className="icon-btn" onClick={()=>setSaleItems(old=>old.filter((_,j)=>j!==i))} aria-label="Remover item"><Trash2 size={15}/></button></div>)}
-        {saleItems.length>0&&<><div className="ap-sale-item-total"><strong>Subtotal: {currency(saleItemTotal)}</strong><label>Desconto (R$)<input type="number" min="0" max={saleItemTotal} step="0.01" value={form.discount||'0'} onChange={e=>setForm(old=>({...old,discount:e.target.value}))}/></label><strong>Total: {currency(Math.max(0,saleItemTotal-Number(form.discount||0)))}</strong></div><p>Preço e custo são conferidos novamente pelo servidor. Cliente e veículo novos devem ser cadastrados antes desta venda.</p></>}
+        {saleItems.length>0&&<><div className="ap-sale-item-total"><strong>Subtotal: {currency(saleItemTotal)}</strong><label>Desconto (R$)<input type="number" min="0" max={saleItemTotal} step="0.01" value={form.discount||'0'} onChange={e=>setForm(old=>({...old,discount:e.target.value}))}/></label><strong>Total: {currency(Math.max(0,saleItemTotal-Number(form.discount||0)))}</strong></div><p>Preço e custo são conferidos novamente pelo servidor. Para cliente ou veículo novo, use Salvar e selecionar antes de concluir a venda.</p></>}
         <small>Sem itens selecionados, a venda avulsa atual continua disponível.</small>
       </section>}
       {page === 'quotes' && <section className="ap-sale-items"><h3>Itens do orçamento</h3>
@@ -1291,6 +1354,14 @@ const { data: saved, error } = await q.select('*').single()
       {page === 'expenses' && <div className="ap-expense-options"><label>Situação da despesa<select className="select" value={form.status || 'paid'} onChange={e=>setForm(old=>({...old,status:e.target.value}))}><option value="paid">Paga — movimentar o caixa</option><option value="pending">Pendente — não movimentar o caixa</option></select></label>{form.status !== 'pending' && <label>Forma de pagamento<select className="select" value={form.payment_method || 'pix'} onChange={e=>setForm(old=>({...old,payment_method:e.target.value}))}><option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Débito</option><option value="credit">Crédito</option><option value="transfer">Transferência</option><option value="other">Outro</option></select></label>}</div>}
       {page === 'sales' && ['credit','debit'].includes(form.method || '') && <div className="form-grid"><label>Bandeira do cartão <span className="required">*</span><select className="select" value={form.card_brand || ''} onChange={e=>setForm(old=>({...old,card_brand:e.target.value}))} required><option value="">Selecione a bandeira</option><option value="visa">Visa</option><option value="mastercard">Mastercard</option><option value="elo">Elo (+1 p.p.)</option><option value="amex">Amex (+1 p.p.)</option><option value="other">Outra</option></select></label></div>}
       {page === 'sales' && ['credit','debit'].includes(form.method || '') && (()=>{const base=saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount);const rate=(form.method==='debit'?2.99:(cardRates[Number(form.installments||1)]??0)) + (['elo','amex'].includes(form.card_brand||'')?1:0);const fee=Math.round(base*rate)/100;return <p style={{margin:'10px 0',opacity:.9}}>Taxa aplicada: <strong>{rate.toFixed(2)}%</strong> · Acréscimo: <strong>{currency(fee)}</strong> · Total previsto: <strong>{currency(Math.round((base+fee)*100)/100)}</strong></p>})()}
+      {['quotes','work_orders'].includes(page) && <div className="quick-sale-relations">
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          <button type="button" className="outline-btn" disabled={!can('customers','create') || quickSaving} onClick={()=>{setQuickCustomer(v=>!v);setQuickVehicle(false)}}>+ Novo cliente</button>
+          <button type="button" className="outline-btn" disabled={!can('vehicles','create') || quickSaving || !form.customer_id} onClick={()=>{setQuickVehicle(v=>!v);setQuickCustomer(false)}}>+ Novo veículo</button>
+        </div>
+        {quickCustomer && quickCustomerFields}
+        {quickVehicle && quickVehicleFields}
+      </div>}
       <div className="form-grid">{config[page].fields.filter(f => !(page === 'products' && editing && f.key === 'quantity') && !(page === 'quotes' && ['item_type','item_id','quantity','unit_price'].includes(f.key)) && !(page === 'sales' && (f.key === 'customer_id' || f.key === 'vehicle_id' || (saleItems.length>0 && ['description','amount','cost'].includes(f.key)) || (f.key === 'installments' && form.method !== 'credit')))).map(f => <label key={f.key}>{f.label}{f.required && <span className="required"> *</span>}{(['vehicles','quotes','work_orders'].includes(page) && f.key === 'customer_id') ? <select className="select" value={form.customer_id || ''} onChange={e => setForm(old => ({ ...old, customer_id: e.target.value, vehicle_id: '', quote_id: '' }))}><option value="">{page === 'vehicles' ? 'Sem proprietário' : 'Selecione o cliente'}</option>{data.customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select> : (['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id') ? <select className="select" value={form.vehicle_id || ''} onChange={e => setForm(old => ({ ...old, vehicle_id: e.target.value }))}><option value="">Sem veículo</option>{data.vehicles.filter(v => !v.customer_id || v.customer_id === form.customer_id).map(v => <option key={v.id} value={v.id}>{v.plate || v.model || v.id.slice(0,8)}</option>)}</select> : (page === 'work_orders' && f.key === 'quote_id') ? <select className="select" value={form.quote_id || ''} onChange={e => setForm(old => ({ ...old, quote_id: e.target.value }))}><option value="">Sem orçamento</option>{data.quotes.filter(q => q.status === 'approved' && q.customer_id === form.customer_id).map(q => <option key={q.id} value={q.id}>Orçamento {q.id.slice(0,8)} · {currency(number(q.amount))}</option>)}</select> : (page === 'quotes' && f.key === 'item_type') ? <select className="select" value={form.item_type || 'service'} onChange={e => setForm(old => ({ ...old, item_type: e.target.value, item_id: '', unit_price: '' }))}><option value="service">Serviço</option><option value="product">Produto</option></select> : (page === 'quotes' && f.key === 'item_id') ? <select className="select" value={form.item_id || ''} onChange={e => { const item = (form.item_type === 'product' ? data.products : data.services).find(i => i.id === e.target.value); setForm(old => ({ ...old, item_id: e.target.value, unit_price: item ? String(item.price || 0) : '' })) }}><option value="">Sem item</option>{(form.item_type === 'product' ? data.products : data.services).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select> : (['quotes','work_orders'].includes(page) && f.key === 'status') ? <select className="select" value={form.status || (page === 'quotes' ? 'draft' : 'waiting')} onChange={e => setForm(old => ({ ...old, status: e.target.value }))}>{(page === 'quotes' ? [['draft','Rascunho'],['sent','Aguardando aprovação do cliente'],['rejected','Recusado']] : [['waiting','Aguardando'],['in_progress','Em andamento'],['finished','Concluída'],['delivered','Entregue'],['cancelled','Cancelada']]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select> : (page === 'cash_entries' && f.key === 'kind') ? <select className="select" value={form.kind || 'income'} onChange={e => setForm(old => ({...old,kind:e.target.value}))}><option value="income">Entrada — dinheiro recebido</option><option value="expense">Saída — dinheiro pago</option></select> : (page === 'sales' && f.key === 'method') ? <select className="select" value={['pix','cash','debit','credit'].includes(form.method || '') ? form.method : form.method ? 'legacy' : ''} onChange={e => setForm(old => ({ ...old, method: e.target.value, installments: '1', card_brand: '' }))} required><option value="" disabled>Selecione a forma de pagamento</option>{form.method && !['pix','cash','debit','credit'].includes(form.method) && <option value="legacy" disabled>Anterior: {form.method} — selecione uma opção</option>}<option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select> : (page === 'sales' && f.key === 'installments') ? <><select className="select" value={form.installments || '1'} onChange={e => setForm(old => ({ ...old, installments: e.target.value }))}>{Array.from({ length: 18 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}x — {cardRates[n]===undefined?'taxa não configurada':cardRates[n]+'%'}</option>)}</select><small style={{ display: 'block', marginTop: 6, opacity: .8 }}>Taxa base: {cardRates[Number(form.installments||1)] ?? 'não configurada'}% · Elo/Amex: +1 p.p.</small></> : <input type={f.type || 'text'} step={f.type === 'number' ? 'any' : undefined} min={f.type === 'number' ? '0' : undefined} value={form[f.key] || ''} onChange={e => setForm(old => ({ ...old, [f.key]: e.target.value }))} required={f.required}/>}</label>)}</div><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setModal(false)}>Cancelar</button><button type="submit" className="primary-btn" disabled={saving}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Cadastrar'}</button></div></form></div></div>}
 
   </div>

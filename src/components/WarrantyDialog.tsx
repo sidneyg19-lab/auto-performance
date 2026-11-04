@@ -19,22 +19,31 @@ const panelStyle: React.CSSProperties = { background: '#111d34', border: '1px so
 const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 7, fontSize: 12, fontWeight: 600, color: '#bcd0ee' }
 
 export default function WarrantyDialog({ organizationId, saleId, orderId, customer, vehicle, technician, finishedAt, onClose }: Props) {
-  const storageKey = `auto-performance-warranty-${orderId}`
+  const storageKey = `auto-performance-warranty-${orderId || `sale-${saleId}`}`
   const [draft, setDraft] = useState<Draft>(() => {
     try { const saved = localStorage.getItem(storageKey); return saved ? { ...initial, ...JSON.parse(saved) } : initial } catch { return initial }
   })
   const [persistError,setPersistError]=useState('')
   const [persisted,setPersisted]=useState(false)
   useEffect(()=>{let active=true;void (async()=>{
-    const {data,error}=await supabase.from('ap_warranties').select('details').eq('organization_id',organizationId).eq('work_order_id',orderId).maybeSingle()
+    const {data,error}=await supabase.from('ap_warranties').select('details').eq('organization_id',organizationId).eq(orderId ? 'work_order_id' : 'sale_id',orderId || saleId).maybeSingle()
     if(!active)return
     if(error){setPersistError(error.message);return}
     if(data?.details && typeof data.details==='object'){setDraft({...initial,...data.details as Draft});setPersisted(true)}
   })();return()=>{active=false}},[organizationId,orderId])
   async function saveWarranty(){
     if(!draft.equipment.trim()||!draft.term.trim()){alert('Informe equipamento e prazo de garantia.');return false}
-    const {error}=await supabase.from('ap_warranties').upsert({organization_id:organizationId,work_order_id:orderId,sale_id:saleId||null,details:draft},{onConflict:'organization_id,work_order_id'})
-    if(error){setPersistError(error.message);alert('Não foi possível salvar garantia: '+error.message);return false}
+    if (!organizationId || (!orderId && !saleId)) { setPersistError('Venda ou OS não identificada.'); return false }
+    // Consultar primeiro evita depender de UNIQUE(sale_id) para garantias de vendas diretas.
+    const key = orderId ? 'work_order_id' : 'sale_id'
+    const value = orderId || saleId
+    const existing = await supabase.from('ap_warranties').select('id').eq('organization_id',organizationId).eq(key,value).maybeSingle()
+    if (existing.error) { setPersistError(existing.error.message); alert('Falha ao consultar garantia: '+existing.error.message); return false }
+    const payload = { organization_id:organizationId, work_order_id:orderId||null, sale_id:saleId||null, details:draft }
+    const result = existing.data?.id
+      ? await supabase.from('ap_warranties').update({details:draft, ...(saleId ? {sale_id:saleId} : {})}).eq('id',existing.data.id).eq('organization_id',organizationId).select('id').single()
+      : await supabase.from('ap_warranties').insert(payload).select('id').single()
+    if(result.error){setPersistError(result.error.message);alert('Não foi possível salvar garantia: '+result.error.message);return false}
     setPersisted(true);setPersistError('');return true
   }
   const change = (field: keyof Omit<Draft, 'accessories'>, value: string) => setDraft(old => ({ ...old, [field]: value }))
@@ -50,11 +59,11 @@ export default function WarrantyDialog({ organizationId, saleId, orderId, custom
     const box = (label: string, value: string) => `<div class="cell"><span class="caption">${escapeHtml(label)}</span><strong>${escapeHtml(value || 'Não informado')}</strong></div>`
     const clause = (number: string, title: string, content: string) => `<div class="clause"><b class="number">${number}</b><div><strong>${escapeHtml(title)}</strong><p>${escapeHtml(content).replace(/\n/g, '<br>')}</p></div></div>`
     const rows = draft.accessories.filter(a => a.name.trim()).map(a => `<tr><td>${escapeHtml(a.name)}</td><td>${escapeHtml(a.model)}</td><td>${money(a.price)}</td></tr>`).join('')
-    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Garantia OS ${escapeHtml(orderId.slice(0, 8))}</title><style>
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Garantia ${orderId ? 'OS' : 'Venda'} ${escapeHtml((orderId || saleId).slice(0, 8))}</title><style>
       *{box-sizing:border-box}body{font:13px Arial,sans-serif;color:#1c2a40;margin:24px;line-height:1.45}header{border-bottom:3px solid #5267e8;padding-bottom:12px;margin-bottom:18px}header small{color:#55627c}h1{font-size:22px;margin:5px 0}h2{font-size:15px;margin:21px 0 9px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.cell,.clause{border:1px solid #cbd4e3;border-radius:7px;padding:11px;break-inside:avoid}.cell{min-height:59px}.caption{display:block;color:#596982;font-size:10px;margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px}.cell strong{font-size:12px;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd4e3;padding:9px;text-align:left}th{background:#edf1fa}.clause{display:flex;gap:12px;margin-bottom:8px}.number{background:#e9eeff;border-radius:5px;padding:7px;height:max-content}.clause p{margin:5px 0 0;white-space:normal;overflow-wrap:anywhere}.signatures{display:flex;gap:35px;margin-top:60px}.signatures div{flex:1;border-top:1px solid #444;text-align:center;padding-top:7px}.note{color:#637089;font-size:10px;margin-top:16px}@media print{@page{size:A4;margin:14mm}body{margin:0}h2{break-after:avoid}}
     </style></head><body><header><small>ALDEIR SOM AUTOMOTIVO</small><h1>TERMO DE GARANTIA E INSTALAÇÃO</h1><small>Documento comercial. Não substitui nota fiscal.</small></header>
-    <h2>Identificação do atendimento</h2><div class="grid">${box('Ordem de serviço', orderId.slice(0, 8))}${box('Data de conclusão', date)}${box('Cliente', customer)}${box('Veículo', vehicle)}${box('Instalador', technician)}${box('Equipamento', draft.equipment)}${box('Marca / modelo', draft.model)}${box('Número de série', draft.serial)}</div>
-    <h2>Opcionais instalados</h2><table><thead><tr><th>Item</th><th>Modelo / compatibilidade</th><th>Valor</th></tr></thead><tbody>${rows || '<tr><td colspan="3">Nenhum opcional informado</td></tr>'}<tr><td colspan="2"><strong>Total dos opcionais informados</strong></td><td><strong>${money(String(total))}</strong></td></tr></tbody></table>
+    <h2>Identificação do atendimento</h2><div class="grid">${box(orderId ? 'Ordem de serviço' : 'Venda', (orderId || saleId).slice(0, 8))}${box('Data de conclusão', date)}${box('Cliente', customer)}${box('Veículo', vehicle)}${box('Instalador', technician)}${box('Equipamento', draft.equipment)}${box('Marca / modelo', draft.model)}${box('Número de série', draft.serial)}</div>
+    <h2>Produtos / opcionais</h2><table><thead><tr><th>Item</th><th>Modelo / compatibilidade</th><th>Valor</th></tr></thead><tbody>${rows || '<tr><td colspan="3">Nenhum opcional informado</td></tr>'}<tr><td colspan="2"><strong>Total dos opcionais informados</strong></td><td><strong>${money(String(total))}</strong></td></tr></tbody></table>
     <h2>Condições de garantia</h2>${clause('01', 'Prazo de garantia', draft.term)}${clause('02', 'Cobertura', draft.coverage)}${clause('03', 'Exclusões e limitações', draft.exclusions)}${clause('04', 'Orientações ao cliente', draft.guidance)}
     <div class="signatures"><div>Responsável pela loja</div><div>Cliente / responsável</div></div><p class="note">Emitido em ${new Date().toLocaleString('pt-BR')} pelo Auto Performance. As condições informadas não substituem os direitos legais do consumidor.</p></body></html>`
     const popup = window.open('', '_blank')
@@ -68,10 +77,10 @@ export default function WarrantyDialog({ organizationId, saleId, orderId, custom
       <div className="modal-head"><div><div className="eyebrow">DOCUMENTO DE ENTREGA</div><h2>Termo de garantia</h2></div><button className="icon-btn" onClick={onClose} aria-label="Fechar"><X size={21}/></button></div>
       <div style={{ padding: '10px 22px 22px' }}>
         <div style={panelStyle}><h3 style={{ margin: '0 0 12px' }}>01 · Dados do atendimento</h3><div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 10 }}>
-          {([['OS', orderId.slice(0,8)], ['Cliente', customer], ['Veículo', vehicle], ['Instalador', technician || 'Não informado']] as const).map(([label, value]) => <div key={label} style={{ ...fieldStyle, minHeight: 58 }}><span style={{ fontSize: 11, color: '#a8b9d6' }}>{label}</span><div style={{ marginTop: 5, overflowWrap: 'anywhere' }}>{value}</div></div>)}
+          {([[orderId ? 'OS' : 'Venda', (orderId || saleId).slice(0,8)], ['Cliente', customer], ['Veículo', vehicle], ['Instalador', technician || 'Não informado']] as const).map(([label, value]) => <div key={label} style={{ ...fieldStyle, minHeight: 58 }}><span style={{ fontSize: 11, color: '#a8b9d6' }}>{label}</span><div style={{ marginTop: 5, overflowWrap: 'anywhere' }}>{value}</div></div>)}
         </div></div>
         <div style={panelStyle}><h3 style={{ margin: '0 0 12px' }}>02 · Equipamento principal</h3><div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 12 }}>
-          {input('equipment', 'Equipamento instalado', 'Central multimídia', true)}{input('model', 'Marca / modelo', 'Ex.: Aikon / modelo')}{input('serial', 'Número de série', 'Número de série')}{input('term', 'Prazo de garantia', 'Ex.: 12 meses', true)}
+          {input('equipment', 'Equipamento / produto', 'Central multimídia', true)}{input('model', 'Marca / modelo', 'Ex.: Aikon / modelo')}{input('serial', 'Número de série', 'Número de série')}{input('term', 'Prazo de garantia', 'Ex.: 12 meses', true)}
         </div></div>
         <div style={panelStyle}><h3 style={{ margin: '0 0 12px' }}>03 · Opcionais instalados</h3>
           {draft.accessories.map((a, i) => <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) 100px 34px', gap: 8, marginBottom: 10, alignItems: 'end' }}>
