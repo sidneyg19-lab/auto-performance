@@ -624,6 +624,39 @@ let y = 0
       alert(`O PDF ${filename} foi baixado. No WhatsApp, clique no clipe (Anexar) e selecione esse arquivo na pasta Downloads.`)
     }catch(error){whatsapp?.close();alert(`Não foi possível preparar o PDF: ${error instanceof Error?error.message:String(error)}`)}
   }
+  function shareOperationWhatsApp(kind: 'sales' | 'work_orders', record: RecordItem) {
+    const customer = data.customers.find(c => c.id === record.customer_id)
+    if (!customer) { alert('Este registro não possui cliente cadastrado. Vincule um cliente antes de compartilhar.'); return }
+    const raw = String(customer.phone || '').replace(/\D/g, '')
+    const phone = raw.startsWith('55') && (raw.length === 12 || raw.length === 13)
+      ? raw : (raw.length === 10 || raw.length === 11 ? `55${raw}` : '')
+    if (!phone) { alert('O cliente não possui um telefone brasileiro válido com DDD. Atualize o cadastro do cliente.'); return }
+    const vehicle = data.vehicles.find(v => v.id === record.vehicle_id)
+    const vehicleText = vehicle ? [vehicle.brand, vehicle.model, vehicle.plate].filter(Boolean).join(' · ') : 'Não informado'
+    const numberId = record.id.slice(0, 8).toUpperCase()
+    const lines = kind === 'sales'
+      ? [
+          `Olá, ${customer.name}! Seguem os dados da sua venda na ${shopName}.`,
+          `Venda: ${numberId}`,
+          `Situação: ${statusLabel(String(record.status || ''))}`,
+          `Veículo: ${vehicleText}`,
+          `Descrição: ${String(record.description || 'Venda')}`,
+          `Valor: ${currency(Number(record.amount || 0))}`,
+          `Data: ${record.date ? new Date(String(record.date) + 'T12:00:00').toLocaleDateString('pt-BR') : 'Não informada'}`,
+          'Agradecemos a preferência!'
+        ]
+      : [
+          `Olá, ${customer.name}! Seguem as informações da sua ordem de serviço na ${shopName}.`,
+          `OS: ${numberId}`,
+          `Situação: ${statusLabel(String(record.status || ''))}`,
+          `Veículo: ${vehicleText}`,
+          `Técnico: ${String(record.technician || 'Não informado')}`,
+          `Serviço/observações: ${String(record.notes || 'Não informado')}`,
+          'Qualquer dúvida, estamos à disposição!'
+        ]
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`, '_blank', 'noopener,noreferrer')
+  }
+
   async function saveQuickCustomer() {
     if (!orgId || !can('customers', 'create') || quickSaving) { alert('Sem permissão para cadastrar clientes.'); return }
     const name = (form.new_customer_name || '').trim()
@@ -1221,6 +1254,7 @@ const { data: saved, error } = await q.select('*').single()
 
           {['quotes','work_orders'].includes(page) && (operationLoading || operationErrors[page]) && <div className="notice">{operationLoading ? 'Carregando operações…' : operationErrors[page]}</div>}
           <section className="panel table-panel"><div className="table-tools"><h3>Registros</h3><div className="search-box"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar registros..."/></div></div><div className="table-scroll"><table><thead><tr>{config[page].fields.slice(0,5).map(f => <th key={f.key}>{f.label}</th>)}<th>Ações</th></tr></thead><tbody>{visibleRows.map(r => <tr key={r.id}>{config[page].fields.slice(0,5).map(f => <td key={f.key}>{['amount','price','cost'].includes(f.key) && !(page === 'cash_entries' && f.key === 'amount') ? currency(number(r[f.key])) : ['vehicles','sales'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || (r.customer_id ? 'Cliente não encontrado' : 'Sem proprietário')) : ['quotes','work_orders'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || '—') : ['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id' ? (data.vehicles.find(v => v.id === r.vehicle_id)?.plate || '—') : f.key === 'item_id' ? ([...data.products,...data.services].find(i => i.id === r.item_id)?.name || '—') : f.key === 'item_type' ? (r.item_type === 'product' ? 'Produto' : r.item_type === 'service' ? 'Serviço' : '—') : page === 'cash_entries' && f.key === 'kind' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '↙' : '↗'} {cashTypeLabel(String(r.kind || ''))}</span> : page === 'cash_entries' && f.key === 'amount' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '+' : '−'} {currency(number(r.amount))}</span> : page === 'cash_entries' && f.key === 'description' ? <>{String(r.description || '').startsWith('Recebimento de venda') ? 'Recebimento de venda' : String(r.description || '')}{isAutomaticCash(r) && <small className="ap-auto-label">Automático</small>}</> : page === 'work_orders' && f.key === 'quote_id' ? (r.quote_id ? `Orçamento ${String(r.quote_id).slice(0,8)}` : '—') : f.key === 'status' ? statusLabel(String(r.status || '')) : String(r[f.key] ?? '—')}</td>)}<td><div className="table-actions">{page==='quotes' && <button type="button" onClick={()=>printQuote(r)}>PDF / Imprimir</button>}{page==='quotes' && <button type="button" onClick={()=>shareQuote(r)}>WhatsApp</button>}
+          {(page === 'sales' || page === 'work_orders') && can(page, 'view') && <button type="button" onClick={() => shareOperationWhatsApp(page as 'sales' | 'work_orders', r)} title="Enviar informações para o WhatsApp do cliente">WhatsApp</button>}
           {page==='quotes' && can('quotes','edit') && can('work_orders','create') && ['draft','sent'].includes(String(r.status)) && <button type="button" onClick={()=>void approveQuote(r)}>Aprovar e gerar OS</button>}
           {page==='work_orders' && can('work_orders','edit') && can('sales','create') && r.status!=='cancelled' && r.status!=='delivered' && <button type="button" onClick={()=>void finishOs(r)}>{r.status==='finished'?'Abrir venda':'Concluir → Venda'}</button>}
           {page==='work_orders' && r.status==='finished' && can('work_orders','edit') && <button type="button" onClick={()=>void deliverOs(r)}>Entregar / Garantia</button>}
