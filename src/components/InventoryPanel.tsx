@@ -232,7 +232,11 @@ export default function InventoryPanel({
     transfer_out: 'Transferência enviada',
     sale: 'Venda',
     sale_reversal: 'Estorno de venda',
-    adjustment: 'Ajuste'
+    adjustment: 'Ajuste',
+    opening_balance: 'Saldo inicial',
+    purchase: 'Compra',
+    return: 'Devolução',
+    transfer: 'Transferência'
   }
 
   return (
