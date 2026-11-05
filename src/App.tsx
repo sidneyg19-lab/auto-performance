@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 
 import { Activity, ArrowDownRight, ArrowUpRight, BadgeCheck, BarChart3, Boxes, CalendarDays, BellRing, Volume2, VolumeX, CarFront, ChevronDown, CircleDollarSign, ClipboardList, Download, FileDown, MessageCircle, ShieldCheck, Eye, XCircle, Pencil, CreditCard, PackageCheck, ArrowRightCircle, Printer, Flame, Gauge, LayoutDashboard, Menu, Package, Plus, Search, Settings2, ShoppingCart, Target, Trash2, Truck, Users, Wallet, Wrench, X } from 'lucide-react'
 
@@ -183,6 +183,8 @@ function App() {
   }
 
   const [search, setSearch] = useState('')
+  const [pageSize, setPageSize] = useState(20)
+  const [listPage, setListPage] = useState(1)
 
   const [sidebar, setSidebar] = useState(false)
 
@@ -1275,7 +1277,11 @@ const { data: saved, error } = await q.select('*').single()
 
   }
 
-  const visibleRows = (data[page] || []).filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(search.toLowerCase())))
+  const visibleRows = (data[page] || []).filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(search.trim().toLowerCase())))
+  const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize))
+  const currentListPage = Math.min(listPage, totalPages)
+  const paginatedRows = visibleRows.slice((currentListPage - 1) * pageSize, currentListPage * pageSize)
+  useEffect(() => { setListPage(1) }, [page, search, pageSize])
 
   return <div className="app-shell">
 
@@ -1358,7 +1364,7 @@ const { data: saved, error } = await q.select('*').single()
 
           {['quotes','work_orders'].includes(page) && (operationLoading || operationErrors[page]) && <div className="notice">{operationLoading ? 'Carregando operações…' : operationErrors[page]}</div>}
           <style>{`.table-actions .ap-icon-action{display:inline-flex!important;align-items:center!important;justify-content:center!important;flex:0 0 34px!important;width:34px!important;min-width:34px!important;max-width:34px!important;height:34px!important;min-height:34px!important;padding:0!important;white-space:nowrap!important;line-height:1!important;cursor:pointer}.table-actions .ap-icon-action svg{display:block;flex-shrink:0}`}</style>
-          <section className="panel table-panel"><div className="table-tools"><h3>Registros</h3><div className="search-box"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar registros..."/></div></div><div className="table-scroll"><table><thead><tr>{config[page].fields.slice(0,5).map(f => <th key={f.key}>{f.label}</th>)}<th>Ações</th></tr></thead><tbody>{visibleRows.map(r => <tr key={r.id}>{config[page].fields.slice(0,5).map(f => <td key={f.key}>{['amount','price','cost'].includes(f.key) && !(page === 'cash_entries' && f.key === 'amount') ? currency(number(r[f.key])) : ['vehicles','sales'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || (r.customer_id ? 'Cliente não encontrado' : 'Sem proprietário')) : ['quotes','work_orders'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || '—') : ['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id' ? (data.vehicles.find(v => v.id === r.vehicle_id)?.plate || '—') : f.key === 'item_id' ? ([...data.products,...data.services].find(i => i.id === r.item_id)?.name || '—') : f.key === 'item_type' ? (r.item_type === 'product' ? 'Produto' : r.item_type === 'service' ? 'Serviço' : '—') : page === 'cash_entries' && f.key === 'kind' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '↙' : '↗'} {cashTypeLabel(String(r.kind || ''))}</span> : page === 'cash_entries' && f.key === 'amount' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '+' : '−'} {currency(number(r.amount))}</span> : page === 'cash_entries' && f.key === 'description' ? <>{String(r.description || '').startsWith('Recebimento de venda') ? 'Recebimento de venda' : String(r.description || '')}{isAutomaticCash(r) && <small className="ap-auto-label">Automático</small>}</> : page === 'work_orders' && f.key === 'quote_id' ? (r.quote_id ? `Orçamento ${String(r.quote_id).slice(0,8)}` : '—') : f.key === 'status' ? statusLabel(String(r.status || '')) : String(r[f.key] ?? '—')}</td>)}<td><div className="table-actions" style={{display:'flex',alignItems:'center',justifyContent:'flex-start',flexWrap:'nowrap',gap:6,minWidth:'max-content'}}>
+          <section className="panel table-panel"><div className="table-tools"><h3>Registros</h3><div className="search-box"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar registros..."/></div></div><div className="table-scroll"><table><thead><tr>{config[page].fields.slice(0,5).map(f => <th key={f.key}>{f.label}</th>)}<th>Ações</th></tr></thead><tbody>{paginatedRows.map(r => <tr key={r.id}>{config[page].fields.slice(0,5).map(f => <td key={f.key}>{['amount','price','cost'].includes(f.key) && !(page === 'cash_entries' && f.key === 'amount') ? currency(number(r[f.key])) : ['vehicles','sales'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || (r.customer_id ? 'Cliente não encontrado' : 'Sem proprietário')) : ['quotes','work_orders'].includes(page) && f.key === 'customer_id' ? (data.customers.find(c => c.id === r.customer_id)?.name || '—') : ['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id' ? (data.vehicles.find(v => v.id === r.vehicle_id)?.plate || '—') : f.key === 'item_id' ? ([...data.products,...data.services].find(i => i.id === r.item_id)?.name || '—') : f.key === 'item_type' ? (r.item_type === 'product' ? 'Produto' : r.item_type === 'service' ? 'Serviço' : '—') : page === 'cash_entries' && f.key === 'kind' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '↙' : '↗'} {cashTypeLabel(String(r.kind || ''))}</span> : page === 'cash_entries' && f.key === 'amount' ? <span className={`ap-movement ${r.kind === 'income' ? 'in' : 'out'}`}>{r.kind === 'income' ? '+' : '−'} {currency(number(r.amount))}</span> : page === 'cash_entries' && f.key === 'description' ? <>{String(r.description || '').startsWith('Recebimento de venda') ? 'Recebimento de venda' : String(r.description || '')}{isAutomaticCash(r) && <small className="ap-auto-label">Automático</small>}</> : page === 'work_orders' && f.key === 'quote_id' ? (r.quote_id ? `Orçamento ${String(r.quote_id).slice(0,8)}` : '—') : f.key === 'status' ? statusLabel(String(r.status || '')) : String(r[f.key] ?? '—')}</td>)}<td><div className="table-actions" style={{display:'flex',alignItems:'center',justifyContent:'flex-start',flexWrap:'nowrap',gap:6,minWidth:'max-content'}}>
           {page==='quotes' && <button type="button" className="ap-icon-action" onClick={()=>printQuote(r)} title="PDF / Imprimir" aria-label="PDF / Imprimir"><Printer size={17}/></button>}
           {page==='quotes' && <button type="button" className="ap-icon-action" onClick={()=>shareQuote(r)} title="Compartilhar orçamento pelo WhatsApp" aria-label="Compartilhar orçamento pelo WhatsApp"><MessageCircle size={17}/></button>}
           {(page === 'sales' || page === 'work_orders') && can(page, 'view') && <button type="button" className="ap-icon-action" onClick={() => downloadOperationPdf(page as 'sales' | 'work_orders', r)} title="Baixar PDF" aria-label="Baixar PDF"><FileDown size={17}/></button>}
@@ -1374,7 +1380,22 @@ const { data: saved, error } = await q.select('*').single()
           {can(page, 'edit') && !(page === 'quotes' && !['draft','sent'].includes(String(r.status))) && !(page === 'work_orders' && !['waiting','in_progress'].includes(String(r.status))) && !(page === 'sales' && (r.status !== 'draft' || Boolean(r.work_order_id))) && !(page === 'cash_entries' && isAutomaticCash(r)) && <button type="button" className="ap-icon-action" onClick={() => openEdit(r)} title="Editar" aria-label="Editar"><Pencil size={17}/></button>}
           {page === 'sales' && can('sales','edit') && trackedSales.includes(r.id) && r.status!=='cancelled' && <button type="button" className="ap-icon-action" onClick={()=>void cancelTrackedSale(r.id)} title="Cancelar venda" aria-label="Cancelar venda"><XCircle size={17}/></button>}
           {page === 'work_orders' && can(page, 'edit') && r.status === 'delivered' && <button type="button" className="ap-icon-action" onClick={() => setWarrantyOrder(r)} title="Emitir termo de garantia" aria-label="Emitir termo de garantia"><ShieldCheck size={17}/></button>}
-          {can(page, 'delete') && page !== 'sales' && !(page === 'quotes' && !['draft','sent'].includes(String(r.status))) && !(page === 'work_orders' && (!['waiting','in_progress'].includes(String(r.status)) || data.sales.some(s => s.work_order_id === r.id))) && !(page === 'cash_entries' && isAutomaticCash(r)) && <button type="button" className="delete-btn ap-icon-action" onClick={() => remove(r.id)} title="Excluir" aria-label="Excluir"><Trash2 size={17}/></button>}</div></td></tr>)}</tbody></table>{!visibleRows.length && <Empty text={search ? 'Nenhum registro corresponde à pesquisa.' : 'Nenhum registro cadastrado. Use “Novo registro” para começar.'}/>}</div></section>
+          {can(page, 'delete') && page !== 'sales' && !(page === 'quotes' && !['draft','sent'].includes(String(r.status))) && !(page === 'work_orders' && (!['waiting','in_progress'].includes(String(r.status)) || data.sales.some(s => s.work_order_id === r.id))) && !(page === 'cash_entries' && isAutomaticCash(r)) && <button type="button" className="delete-btn ap-icon-action" onClick={() => remove(r.id)} title="Excluir" aria-label="Excluir"><Trash2 size={17}/></button>}</div></td></tr>)}</tbody></table>{!visibleRows.length && <Empty text={search ? 'Nenhum registro corresponde à pesquisa.' : 'Nenhum registro cadastrado. Use “Novo registro” para começar.'}/>}</div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap',padding:'16px 20px',borderTop:'1px solid rgba(148,163,184,.18)'}}>
+            <label style={{display:'flex',alignItems:'center',gap:10,fontSize:13}}>Registros por página
+              <select className="select" style={{width:88}} value={pageSize} onChange={e=>setPageSize(Number(e.target.value))} aria-label="Registros por página">
+                {[20,50,100].map(n=><option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+            <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+              <span style={{fontSize:13,opacity:.8}}>{visibleRows.length ? `${(currentListPage-1)*pageSize+1}–${Math.min(currentListPage*pageSize,visibleRows.length)} de ${visibleRows.length}` : '0 registros'} · Página {currentListPage} de {totalPages}</span>
+              <button type="button" className="outline-btn" disabled={currentListPage===1} onClick={()=>setListPage(1)} aria-label="Primeira página">«</button>
+              <button type="button" className="outline-btn" disabled={currentListPage===1} onClick={()=>setListPage(p=>Math.max(1,p-1))} aria-label="Página anterior">‹</button>
+              <button type="button" className="outline-btn" disabled={currentListPage===totalPages} onClick={()=>setListPage(p=>Math.min(totalPages,p+1))} aria-label="Próxima página">›</button>
+              <button type="button" className="outline-btn" disabled={currentListPage===totalPages} onClick={()=>setListPage(totalPages)} aria-label="Última página">»</button>
+            </div>
+          </div>
+          </section>
 
         </>}
 
