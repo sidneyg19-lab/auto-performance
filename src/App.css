@@ -85,3 +85,27 @@ main,
 .ap-detail-drawer::-webkit-scrollbar-thumb:hover {
   background: #6079a4;
 }
+
+/* Contas a receber: alertas visuais, sem alterar fluxos financeiros */
+.ap-debt-alert-wrap{position:relative;flex-shrink:0}
+.ap-debt-bell{position:relative;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border:1px solid #35445f;border-radius:12px;background:#17233b;color:#b8c8e6;cursor:pointer}
+.ap-debt-bell.is-overdue{color:#ff897f;border-color:#aa4c54}
+.ap-debt-bell.is-soon{color:#ffcc77;border-color:#92703c}
+.ap-debt-bell.is-overdue svg{animation:ap-debt-pulse 1.9s ease-in-out infinite}
+.ap-debt-count{position:absolute;top:-7px;right:-7px;min-width:18px;padding:2px 5px;border-radius:99px;background:#e05b64;color:white;font-size:11px;font-weight:700}
+.ap-debt-nav-count{margin-left:auto;background:#9a7038;color:#fff;border-radius:20px;padding:2px 7px;font-size:11px;font-weight:700}
+.ap-debt-nav-count.is-overdue{background:#b94450}
+.ap-debt-popover{position:absolute;z-index:80;right:0;top:calc(100% + 12px);width:min(330px,90vw);padding:16px;background:#17243c;border:1px solid #3b4e6b;border-radius:14px;box-shadow:0 14px 35px #0008;color:#f2f5ff}
+.ap-debt-popover p{font-size:13px;line-height:1.5;color:#c4d1e9;margin:9px 0}
+.ap-debt-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.ap-debt-actions button{display:flex;align-items:center;gap:6px;border:1px solid #496080;border-radius:9px;background:#243656;color:white;padding:8px 10px;cursor:pointer}
+.ap-debt-banner{width:100%;display:flex;align-items:center;gap:15px;text-align:left;padding:17px 20px;margin:14px 0;border-radius:15px;background:#39232f;border:1px solid #9a4552;color:#f7e9ed;cursor:pointer}
+.ap-debt-banner.is-soon{background:#332c25;border-color:#94743e}
+.ap-debt-banner-icon{color:#ff8d86;display:flex;animation:ap-debt-pulse 2s ease-in-out infinite}
+.ap-debt-banner.is-soon .ap-debt-banner-icon{color:#ffcb75}
+.ap-debt-banner strong,.ap-debt-banner small{display:block}
+.ap-debt-banner small{color:#d9c5cc;margin-top:4px}
+.ap-debt-banner-link{margin-left:auto;white-space:nowrap;font-weight:600;font-size:12px}
+@keyframes ap-debt-pulse{50%{transform:scale(1.12);filter:brightness(1.3)}}
+@media(prefers-reduced-motion:reduce){.ap-debt-bell.is-overdue svg,.ap-debt-banner-icon{animation:none}}
+@media(max-width:650px){.ap-debt-banner{flex-wrap:wrap}.ap-debt-banner-link{margin-left:0}.ap-debt-popover{right:-65px}}

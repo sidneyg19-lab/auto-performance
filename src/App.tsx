@@ -1,6 +1,6 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
-import { Activity, ArrowDownRight, ArrowUpRight, BadgeCheck, BarChart3, Boxes, CalendarDays, CarFront, ChevronDown, CircleDollarSign, ClipboardList, Download, FileDown, MessageCircle, ShieldCheck, Eye, XCircle, Pencil, CreditCard, PackageCheck, ArrowRightCircle, Printer, Flame, Gauge, LayoutDashboard, Menu, Package, Plus, Search, Settings2, ShoppingCart, Target, Trash2, Truck, Users, Wallet, Wrench, X } from 'lucide-react'
+import { Activity, ArrowDownRight, ArrowUpRight, BadgeCheck, BarChart3, Boxes, CalendarDays, BellRing, Volume2, VolumeX, CarFront, ChevronDown, CircleDollarSign, ClipboardList, Download, FileDown, MessageCircle, ShieldCheck, Eye, XCircle, Pencil, CreditCard, PackageCheck, ArrowRightCircle, Printer, Flame, Gauge, LayoutDashboard, Menu, Package, Plus, Search, Settings2, ShoppingCart, Target, Trash2, Truck, Users, Wallet, Wrench, X } from 'lucide-react'
 
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
@@ -11,6 +11,7 @@ import UserAccountMenu from './components/UserAccountMenu'
 import WarrantyDialog from './components/WarrantyDialog'
 import HRManager from './components/HRManager'
 import InventoryPanel from './components/InventoryPanel'
+import ReceivablesPanel from './components/ReceivablesPanel'
 
 
 
@@ -41,6 +42,8 @@ const modules = [
   { key: 'work_orders', label: 'Ordens de serviço', icon: CalendarDays, group: 'OPERAÇÃO' },
 
   { key: 'sales', label: 'Vendas', icon: ShoppingCart, group: 'OPERAÇÃO' },
+
+  { key: 'receivables', label: 'Contas a receber', icon: CircleDollarSign, group: 'FINANCEIRO' },
 
   { key: 'expenses', label: 'Despesas', icon: ArrowDownRight, group: 'FINANCEIRO' },
 
@@ -104,7 +107,7 @@ function App() {
   const [permissions, setPermissions] = useState<Record<string, {can_view:boolean;can_create:boolean;can_edit:boolean;can_delete:boolean}>>({})
   const [accessReady, setAccessReady] = useState(false)
   const isAdmin = role === 'owner' || role === 'admin'
-  const moduleForPage = (p: string) => p === 'inventory' ? 'products' : p === 'expenses' || p === 'cash_entries' ? 'financial' : p
+  const moduleForPage = (p: string) => p === 'inventory' ? 'products' : p === 'expenses' || p === 'cash_entries' || p === 'receivables' ? 'financial' : p
   const can = (p: string, action: 'view'|'create'|'edit'|'delete' = 'view') => {
     if (!accessReady || !orgId) return false
     if (p === 'dashboard' || p === 'settings' || p === 'hr') return isAdmin
@@ -112,6 +115,8 @@ function App() {
     return Boolean(permissions[moduleForPage(p)]?.[`can_${action}`])
   }
 
+
+  useEffect(()=>{if(orgId)void refreshReceivableAlerts(orgId)},[orgId])
 
   const [saleDetails, setSaleDetails] = useState<RecordItem | null>(null)
   const [installmentDetails, setInstallmentDetails] = useState<Record<string, {installments:number;rate_percent:number;base_amount:number;fee_amount:number;total_amount:number;card_brand?:string|null;payment_method?:string|null}>>({})
@@ -123,10 +128,13 @@ function App() {
   const [quoteItems, setQuoteItems] = useState<{type:'product'|'service';id:string;quantity:number;price:number}[]>([])
   const [paySale, setPaySale] = useState<RecordItem | null>(null)
   const [payMethod, setPayMethod] = useState('pix')
+  const [osInvoiceMode,setOsInvoiceMode]=useState(false)
+  const [osDueDate,setOsDueDate]=useState('')
+  const [osInvoiceNumber,setOsInvoiceNumber]=useState('')
   const [payBrand, setPayBrand] = useState('')
   const [payInstallments, setPayInstallments] = useState('1')
   const [payLocations, setPayLocations] = useState<Record<string,string>>({})
-  const [saleItems, setSaleItems] = useState<{type:'product'|'service';id:string;quantity:number;location_id?:string}[]>([])
+  const [saleItems, setSaleItems] = useState<{type:'product'|'service';id:string;quantity:number;price:number;location_id?:string}[]>([])
   const [pickType, setPickType] = useState<'product'|'service'>('product')
   const [pickId, setPickId] = useState('')
   const [pickLocation, setPickLocation] = useState('')
@@ -149,6 +157,30 @@ function App() {
   const [operationErrors, setOperationErrors] = useState<Record<string, string>>({})
 
   const [page, setPage] = useState('dashboard')
+  const [receivableAlerts,setReceivableAlerts]=useState<{overdue:number;soon:number;total:number}>({overdue:0,soon:0,total:0})
+  const [receivableAlertError,setReceivableAlertError]=useState(false)
+  const [receivableSoundEnabled,setReceivableSoundEnabled]=useState(false)
+  const [receivableBellOpen,setReceivableBellOpen]=useState(false)
+  function playReceivableSound(){
+    if(!receivableSoundEnabled || !receivableAlerts.overdue && !receivableAlerts.soon)return
+    try {
+      const AudioContextCtor=window.AudioContext
+      if(!AudioContextCtor)return
+      const context=new AudioContextCtor()
+      const start=context.currentTime
+      for(const [index,frequency] of (receivableAlerts.overdue?[740,554,440]:[660,880]).entries()){
+        const oscillator=context.createOscillator(),gain=context.createGain()
+        oscillator.type='sine';oscillator.frequency.value=frequency
+        gain.gain.setValueAtTime(0.0001,start+index*.18)
+        gain.gain.exponentialRampToValueAtTime(.09,start+index*.18+.025)
+        gain.gain.exponentialRampToValueAtTime(.0001,start+index*.18+.16)
+        oscillator.connect(gain);gain.connect(context.destination)
+        oscillator.start(start+index*.18);oscillator.stop(start+index*.18+.17)
+      }
+      // Close only after the last note finishes.
+      window.setTimeout(()=>{void context.close().catch(()=>{})},900)
+    }catch { /* Audio is optional; visual alerts continue working. */ }
+  }
 
   const [search, setSearch] = useState('')
 
@@ -250,7 +282,7 @@ function App() {
           return
         }
         setPermissions(Object.fromEntries((permissionRows || []).map(r => [r.module, r])))
-        const first = modules.find(m => m.key !== 'dashboard' && m.key !== 'settings' && m.key !== 'hr' && (permissionRows || []).some(r => r.module === (m.key === 'expenses' || m.key === 'cash_entries' ? 'financial' : m.key) && r.can_view))
+        const first = modules.find(m => m.key !== 'dashboard' && m.key !== 'settings' && m.key !== 'hr' && (permissionRows || []).some(r => r.module === (m.key === 'expenses' || m.key === 'cash_entries' || m.key === 'receivables' ? 'financial' : m.key) && r.can_view))
         setPage(first?.key || 'no_access')
       } else setPage('dashboard')
       setAccessReady(true)
@@ -443,9 +475,9 @@ function App() {
 
   }, [sales, expenses])
 
-  const saleItemPrice=(item:{type:'product'|'service';id:string;quantity:number})=>{
+  const saleItemPrice=(item:{type:'product'|'service';id:string;quantity:number;price?:number})=>{
     const entry=(item.type==='product'?data.products:data.services).find(p=>p.id===item.id)
-    return Number(entry?.price||0)*item.quantity
+    return Number(item.price ?? entry?.price ?? 0)*item.quantity
   }
   const saleItemTotal=saleItems.reduce((sum,item)=>sum+saleItemPrice(item),0)
   const soldItems=saleItemRows.filter(i=>sales.some(s=>s.id===i.sale_id))
@@ -491,6 +523,17 @@ function App() {
     if(!orgId||!window.confirm('Cancelar esta venda pendente?'))return
     const {error}=await supabase.rpc('ap_cancel_os_sale',{p_org:orgId,p_sale:r.id})
     if(error){alert(error.message);return}await refreshAfterSale(orgId)
+  }
+  async function confirmOsInvoice(){
+    if(!orgId||!paySale)return
+    if(!osDueDate){alert('Informe o vencimento.');return}
+    const products=saleItemRows.filter(i=>i.sale_id===paySale.id&&i.item_type==='product')
+    if(products.some(i=>!payLocations[String(i.product_id)])){alert('Selecione o estoque de origem de cada produto.');return}
+    setSaving(true)
+    const {error}=await supabase.rpc('ap_invoice_os_sale',{p_org:orgId,p_sale:paySale.id,p_due_date:osDueDate,p_invoice:osInvoiceNumber||null,p_locations:payLocations})
+    setSaving(false)
+    if(error){alert('Falha ao faturar: '+error.message);return}
+    setPaySale(null);setOsInvoiceMode(false);await refreshAfterSale(orgId);alert('Venda faturada. Nenhum pagamento foi registrado.')
   }
   async function confirmOsPayment(){
     if(!orgId||!paySale)return
@@ -746,7 +789,7 @@ let y = 0
     <button type="button" className="primary-btn" disabled={quickSaving} onClick={()=>void saveQuickVehicle()}>{quickSaving?'Salvando…':'Salvar veículo e selecionar'}</button>
   </div>
 
-  function openNew() { if (!can(page, 'create')) return; setQuickCustomer(false); setQuickVehicle(false); setQuoteItems([]); setSaleItems([]); setPickId(''); setPickLocation(''); setPickQty('1'); setEditing(null); setForm(page === 'quotes' ? { status: 'draft', item_type: 'service', quantity: '1' } : page === 'work_orders' ? { status: 'waiting' } : page === 'sales' ? { date: today(), method: 'pix', installments: '1', card_brand: '', customer_mode: 'existing', vehicle_mode: 'none' } : page === 'expenses' ? { date: today(), status: 'paid', payment_method: 'pix' } : page === 'cash_entries' ? { date: today(), kind: 'income' } : page === 'goals' ? { month: today().slice(0, 7) } : {}); setModal(true) }
+  function openNew() { if (!can(page, 'create')) return; setQuickCustomer(false); setQuickVehicle(false); setQuoteItems([]); setSaleItems([]); setPickId(''); setPickLocation(''); setPickQty('1'); setEditing(null); setForm(page === 'quotes' ? { status: 'draft', item_type: 'service', quantity: '1' } : page === 'work_orders' ? { status: 'waiting' } : page === 'sales' ? { payment_condition:'immediate', date: today(), method: 'pix', installments: '1', card_brand: '', customer_mode: 'existing', vehicle_mode: 'none' } : page === 'expenses' ? { date: today(), status: 'paid', payment_method: 'pix' } : page === 'cash_entries' ? { date: today(), kind: 'income' } : page === 'goals' ? { month: today().slice(0, 7) } : {}); setModal(true) }
 
   function openEdit(row: RecordItem) { if (!can(page, 'edit')) return; if (page === 'quotes' && !['draft', 'sent'].includes(String(row.status))) { alert('Orçamentos aprovados ou encerrados são somente para consulta.'); return }; if (page === 'work_orders' && !['waiting', 'in_progress'].includes(String(row.status))) { alert('OS concluídas ou entregues não podem ser editadas diretamente.'); return }; if (page === 'sales' && (row.status !== 'draft' || Boolean(row.work_order_id))) { alert('Esta venda não pode ser editada diretamente. Utilize as ações próprias de recebimento ou cancelamento.'); return }; if(page==='quotes') {try{setQuoteItems(JSON.parse(String(row.items||'[]')))}catch{setQuoteItems([])}}; if(page==='products') { alert('Para alterar quantidades, use Controle de estoque. Os demais dados do produto podem ser editados.'); } setEditing(row.id); setForm(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v)]))); setModal(true) }
 
@@ -769,7 +812,22 @@ let y = 0
     })) }))
   }
 
+  async function refreshReceivableAlerts(organizationId:string){
+    const [a,b,c]=await Promise.all([
+      supabase.from('ap_receivables').select('id,amount,due_date').eq('organization_id',organizationId),
+      supabase.from('ap_receivable_receipts').select('receivable_id,payments(amount)').eq('organization_id',organizationId),
+      supabase.from('sales').select('id').eq('organization_id',organizationId)
+    ])
+    if(a.error||b.error||c.error){setReceivableAlertError(true);return}
+    setReceivableAlertError(false)
+    const now=today();const future=new Date();future.setDate(future.getDate()+5);const soon=[future.getFullYear(),String(future.getMonth()+1).padStart(2,'0'),String(future.getDate()).padStart(2,'0')].join('-')
+    const rows=(a.data||[]) as {id:string;amount:number;due_date:string}[]
+    const payments=(b.data||[]) as unknown as {receivable_id:string;payments:{amount:number}|null}[]
+    const open=rows.filter(r=>Number(r.amount)>payments.filter(p=>p.receivable_id===r.id).reduce((n,p)=>n+Number(p.payments?.amount||0),0)+0.005)
+    setReceivableAlerts({overdue:open.filter(r=>r.due_date<now).length,soon:open.filter(r=>r.due_date>=now&&r.due_date<=soon).length,total:open.length})
+  }
   async function refreshAfterSale(organizationId: string) {
+    void refreshReceivableAlerts(organizationId)
     const [salesR, itemsR, paymentsR, installmentsR, customersR, vehiclesR, trackedR, cashR, balancesR, productsR] = await Promise.all([
       supabase.from('sales').select('*').eq('organization_id', organizationId),
       supabase.from('sale_items').select('*').eq('organization_id', organizationId),
@@ -825,7 +883,7 @@ let y = 0
 
     const fields = config[page]?.fields || []
 
-    if (fields.some(f => f.required && !(page === 'sales' && saleItems.length>0 && ['description','amount'].includes(f.key)) && !(page === 'sales' && f.key === 'installments') && !String(form[f.key] || '').trim())) { alert('Preencha os campos obrigatórios.'); return }
+    if (fields.some(f => f.required && !(page === 'sales' && saleItems.length>0 && ['description','amount'].includes(f.key)) && !(page === 'sales' && f.key === 'installments') && !(page === 'sales' && form.payment_condition==='term' && f.key==='method') && !String(form[f.key] || '').trim())) { alert('Preencha os campos obrigatórios.'); return }
     if (page === 'sales') {
       if (saleItems.length && form.customer_mode === 'new') { alert('Clique em Salvar cliente e selecionar antes de finalizar a venda.'); return }
       if (saleItems.length && form.vehicle_mode === 'new') { alert('Clique em Salvar veículo e selecionar antes de finalizar a venda.'); return }
@@ -1011,8 +1069,18 @@ let y = 0
       setSaving(true)
       try {
         if (page === 'sales') {
+          if(form.payment_condition==='term'){
+            if(!saleItems.length){alert('Venda a prazo exige itens cadastrados.');return}
+            if(!form.customer_id||form.customer_mode==='new'){alert('Selecione um cliente cadastrado para venda a prazo.');return}
+            if(!form.due_date){alert('Informe a data de vencimento.');return}
+            if(saleItems.some(i=>!Number.isFinite(i.price)||i.price<0)){alert('Preço negociado inválido.');return}
+            const {error}=await supabase.rpc('ap_create_credit_sale',{p_org:orgId,p_items:saleItems,p_customer:form.customer_id,p_vehicle:form.vehicle_mode==='existing'?form.vehicle_id||null:null,p_discount:Number(form.discount||0),p_due_date:form.due_date,p_invoice:form.invoice_number||null})
+            if(error)throw error
+            setModal(false);setPage('receivables');await refreshAfterSale(orgId);alert('Venda a prazo registrada, sem pagamento antecipado.');return
+          }
           // Itens do catálogo usam a RPC transacional que também baixa estoque.
           if (saleItems.length) {
+            if(saleItems.some(i=>!Number.isFinite(i.price)||i.price<0)){alert('Preço negociado inválido.');setSaving(false);return}
             const { error: itemError } = await supabase.rpc('ap_sale_with_items_card_v2', {
               p_org:orgId, p_items:saleItems, p_method:form.method,
               p_customer:form.customer_id || null,
@@ -1219,13 +1287,13 @@ const { data: saved, error } = await q.select('*').single()
 
       <div className="tenant"><div className="tenant-avatar">AP</div><div className="tenant-text"><strong>{shopName}</strong><small>Minha empresa <ChevronDown size={12}/></small></div></div>
 
-      <nav>{['PAINEL', 'GESTÃO', 'OPERAÇÃO', 'FINANCEIRO', 'INTELIGÊNCIA', 'RH', 'SISTEMA'].map(g => <div className="nav-group" key={g}><div className="nav-heading">{g}</div>{modules.filter(m => m.group === g && can(m.key)).map(m => { const Icon = m.icon; return <button key={m.key} className={`nav-item ${page === m.key ? 'active' : ''}`} onClick={() => navigate(m.key)}><Icon size={18}/><span>{m.label}</span>{page === m.key && <span className="nav-dot"/>}</button> })}</div>)}</nav>
+      <nav>{['PAINEL', 'GESTÃO', 'OPERAÇÃO', 'FINANCEIRO', 'INTELIGÊNCIA', 'RH', 'SISTEMA'].map(g => <div className="nav-group" key={g}><div className="nav-heading">{g}</div>{modules.filter(m => m.group === g && can(m.key)).map(m => { const Icon = m.icon; return <button key={m.key} className={`nav-item ${page === m.key ? 'active' : ''}`} onClick={() => navigate(m.key)}><Icon size={18}/><span>{m.label}</span>{m.key==='receivables'&&receivableAlerts.overdue+receivableAlerts.soon>0&&<span className={'ap-debt-nav-count '+(receivableAlerts.overdue?'is-overdue':'')}>{receivableAlerts.overdue+receivableAlerts.soon}</span>}{page === m.key && <span className="nav-dot"/>}</button> })}</div>)}</nav>
 
       <div className="sidebar-bottom"><div className="system-pill"><span className="status-dot"/> {customerLoading ? 'Carregando dados…' : customerError ? 'Falha na conexão' : 'Sistema operacional' }</div><small>Auto Performance · Versão 2.0</small></div>
 
     </aside>
 
-    <div className="main-shell"><header className="topbar"><div className="top-left"><button className="icon-btn menu-btn" onClick={() => setSidebar(true)} aria-label="Abrir menu"><Menu size={22}/></button><div className="breadcrumb">Painel <span>/</span> <strong>{title}</strong></div></div><div className="top-right"><span className="date-chip"><CalendarDays size={15}/> {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })}</span>{isAdmin && stockAlerts.length > 0 && !stockAlertDismissed && <button type="button" className="outline-btn" title="Estoque mínimo — abrir produtos" onClick={() => { setStockAlertDismissed(true); navigate('products') }} style={{color:'#ffb889',borderColor:'#a65d39'}}>⚠ {stockAlerts.length} em estoque mínimo</button>}<UserAccountMenu /></div></header>
+    <div className="main-shell"><header className="topbar"><div className="top-left"><button className="icon-btn menu-btn" onClick={() => setSidebar(true)} aria-label="Abrir menu"><Menu size={22}/></button><div className="breadcrumb">Painel <span>/</span> <strong>{title}</strong></div></div><div className="top-right"><span className="date-chip"><CalendarDays size={15}/> {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })}</span>{isAdmin && stockAlerts.length > 0 && !stockAlertDismissed && <button type="button" className="outline-btn" title="Estoque mínimo — abrir produtos" onClick={() => { setStockAlertDismissed(true); navigate('products') }} style={{color:'#ffb889',borderColor:'#a65d39'}}>⚠ {stockAlerts.length} em estoque mínimo</button>}{can('receivables')&&<div className="ap-debt-alert-wrap"><button type="button" className={'ap-debt-bell '+(receivableAlerts.overdue?'is-overdue':receivableAlerts.soon?'is-soon':'')} onClick={()=>{setReceivableBellOpen(v=>!v);playReceivableSound()}} title="Alertas de contas a receber" aria-label="Abrir alertas de cobranças" aria-expanded={receivableBellOpen}><BellRing size={19}/>{receivableAlerts.overdue+receivableAlerts.soon>0&&<span className="ap-debt-count">{receivableAlerts.overdue+receivableAlerts.soon}</span>}</button>{receivableBellOpen&&<div className="ap-debt-popover"><strong>Central de cobranças</strong>{receivableAlertError?<p>Não foi possível consultar os alertas. Verifique as permissões.</p>:<><p>🔥 {receivableAlerts.overdue} vencidas · 🔔 {receivableAlerts.soon} vencendo em até 5 dias</p><p>{receivableAlerts.total} contas em aberto</p></>}<div className="ap-debt-actions"><button type="button" onClick={()=>setReceivableSoundEnabled(v=>!v)}>{receivableSoundEnabled?<Volume2 size={15}/>:<VolumeX size={15}/>} {receivableSoundEnabled?'Som ligado':'Som desligado'}</button><button type="button" onClick={()=>{setReceivableBellOpen(false);navigate('receivables')}}>Ver cobranças</button></div></div>}</div>}<UserAccountMenu /></div></header>
 
       <main className="content">
 
@@ -1259,6 +1327,7 @@ const { data: saved, error } = await q.select('*').single()
 
           </div>
 
+          {can('receivables')&&receivableAlerts.overdue+receivableAlerts.soon>0&&<button type="button" className={'ap-debt-banner '+(receivableAlerts.overdue?'is-overdue':'is-soon')} onClick={()=>navigate('receivables')}><span className="ap-debt-banner-icon">{receivableAlerts.overdue?<Flame size={24}/>:<BellRing size={24}/>}</span><span><strong>{receivableAlerts.overdue?'Cobranças vencidas exigem atenção':'Cobranças próximas do vencimento'}</strong><small>{receivableAlerts.overdue} vencidas · {receivableAlerts.soon} vencendo em até 5 dias · {receivableAlerts.total} em aberto</small></span><span className="ap-debt-banner-link">Ver cobranças →</span></button>}
           <div className="dashboard-grid"><section className="panel chart-panel"><div className="panel-head"><div><h3>Desempenho financeiro</h3><p>Vendas e despesas por dia · últimos 7 dias</p></div><span className="legend"><i style={{background:'#34d399'}}/> Vendas <i style={{background:'#fb7185',marginLeft:8}}/> Despesas</span></div><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} barGap={4}><CartesianGrid stroke="#242d43" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="name" stroke="#7885a2" tickLine={false} axisLine={false}/><YAxis stroke="#7885a2" tickLine={false} axisLine={false} width={48}/><Tooltip cursor={{ fill: 'transparent' }} contentStyle={{background:'#172037',border:'1px solid #34415d',borderRadius:12}} formatter={(v) => currency(Number(v))}/><Bar dataKey="vendas" name="Vendas" fill="#34d399" radius={[5,5,0,0]} maxBarSize={28}/><Bar dataKey="despesas" name="Despesas" fill="#fb7185" radius={[5,5,0,0]} maxBarSize={28}/></BarChart></ResponsiveContainer></div></section>
             <section className="panel goal-panel"><div className="panel-head"><div><h3>Meta de faturamento</h3><p>Objetivo do mês atual</p></div><Target size={19} className="muted-icon"/></div><div className="goal-ring" style={{background:`conic-gradient(#5b8cff ${goalPct}%, #27314a ${goalPct}% 100%)`}}><div><strong>{monthlyGoal ? `${goalPct.toFixed(0)}%` : "—"}</strong><small>{monthlyGoal ? "atingido" : "Sem meta definida"}</small></div></div><div className="goal-values"><span>{currency(revenue)}</span><span>{monthlyGoal ? currency(monthlyGoal) : 'Meta não definida'}</span></div><div className="progress-track"><div style={{width:`${goalPct}%`}}/></div><button className="text-action" onClick={() => navigate('goals')}>{monthlyGoal ? 'Gerenciar metas' : 'Definir primeira meta'} →</button></section></div>
 
@@ -1273,7 +1342,7 @@ const { data: saved, error } = await q.select('*').single()
 
             <section className="panel"><div className="panel-head"><div><h3>Pulso da loja <Flame size={18} className="flame"/></h3><p>Indicadores operacionais</p></div></div><div className="pulse-list"><Pulse icon={Package} label="Produtos cadastrados" value={String(data.products.length)}/><Pulse icon={ArrowDownRight} label="Produtos em estoque baixo" value={String(stockAlerts.length)}/><Pulse icon={ClipboardList} label="Orçamentos abertos" value={String(data.quotes.filter(x => ['draft','sent'].includes(String(x.status))).length)}/><Pulse icon={Wrench} label="Ordens em andamento" value={String(data.work_orders.filter(x => ['waiting','in_progress'].includes(String(x.status))).length)}/></div></section></div>
 
-        </> : page === 'inventory' ? (orgId ? <><div className="page-heading"><div><h1>Controle de estoque</h1><p>Controle por local, entradas, saídas e transferências</p></div></div><InventoryPanel orgId={orgId} products={data.products.map((p) => ({
+        </> : page === 'receivables' ? (orgId ? <ReceivablesPanel orgId={orgId} canReceive={can('sales','create')} onReceived={async()=>{await refreshAfterSale(orgId)}}/> : null) : page === 'inventory' ? (orgId ? <><div className="page-heading"><div><h1>Controle de estoque</h1><p>Controle por local, entradas, saídas e transferências</p></div></div><InventoryPanel orgId={orgId} products={data.products.map((p) => ({
   ...p,
   name: String(p.label || p.name || 'Produto sem nome').trim()
 }))} onUpdated={() => { if (orgId) void refreshStockDashboard(orgId) }}/></> : null) : page === 'hr' ? (orgId ? <HRManager orgId={orgId} /> : <div className="notice">Empresa não identificada.</div>) : page === 'settings' ? <><div className="page-heading"><div><div className="eyebrow">PREFERÊNCIAS</div><h1>Configurações</h1><p>Personalize as preferências da loja.</p></div></div><div className="panel settings-panel"><label>Nome da loja<input value={shopName} onChange={e => setShopName(e.target.value)} placeholder="Nome da empresa"/></label><p>O nome é salvo automaticamente neste navegador. As permissões dos funcionários são gerenciadas por empresa. O nome exibido aqui continua local a este navegador.</p><div className="notice"><BadgeCheck size={17}/> Não use esta prévia com dados reais ou sensíveis antes da autenticação e validação das políticas RLS.</div></div><div className="panel settings-panel" style={{marginTop:16}}><h3>Taxas do cartão de crédito (1x a 18x)</h3><p>Taxas base por parcela, sem o adicional de 1 ponto percentual para Elo e Amex. Débito: 2,99%.</p><div className="form-grid">{Array.from({length:18},(_,i)=>i+1).map(n=><label key={n}>{n}x — acréscimo (%)<input type="number" min="0" max="100" step="0.01" value={cardRates[n]??''} onChange={e=>setCardRates(old=>({...old,[n]:Number(e.target.value)}))}/></label>)}</div><button className="primary-btn" disabled={rateSaving||!orgId} onClick={async()=>{if(!orgId)return;setRateSaving(true);try{const rows=Array.from({length:18},(_,i)=>({organization_id:orgId,installments:i+1,rate_percent:cardRates[i+1]}));if(rows.some(r=>r.rate_percent===undefined||!Number.isFinite(r.rate_percent)||r.rate_percent<0||r.rate_percent>100))throw Error('Preencha taxas validas de 1x a 18x');const {error}=await supabase.from('ap_card_rates').upsert(rows,{onConflict:'organization_id,installments'});if(error)throw error;alert('Taxas atualizadas com sucesso.');}catch(e){alert('Erro ao salvar taxas: '+(e instanceof Error?e.message:String(e)))}finally{setRateSaving(false)}}}>{rateSaving?'Salvando…':'Salvar tabela de taxas'}</button></div></> : <>
@@ -1297,7 +1366,7 @@ const { data: saved, error } = await q.select('*').single()
           {page==='quotes' && can('quotes','edit') && can('work_orders','create') && ['draft','sent'].includes(String(r.status)) && <button type="button" className="ap-icon-action" onClick={()=>void approveQuote(r)} title="Aprovar e gerar OS" aria-label="Aprovar e gerar OS"><ClipboardList size={17}/></button>}
           {page==='work_orders' && can('work_orders','edit') && can('sales','create') && r.status!=='cancelled' && r.status!=='delivered' && <button type="button" className="ap-icon-action" onClick={()=>void finishOs(r)} title={r.status==='finished'?'Abrir venda':'Concluir OS e gerar venda'} aria-label={r.status==='finished'?'Abrir venda':'Concluir OS e gerar venda'}><ArrowRightCircle size={17}/></button>}
           {page==='work_orders' && r.status==='finished' && can('work_orders','edit') && <button type="button" className="ap-icon-action" onClick={()=>void deliverOs(r)} title="Entregar / Garantia" aria-label="Entregar / Garantia"><PackageCheck size={17}/></button>}
-          {page==='sales' && r.status==='draft' && can('sales','create') && <button type="button" className="ap-icon-action" onClick={()=>{setPaySale(r);setPayMethod('pix');setPayBrand('');setPayInstallments('1');setPayLocations({})}} title="Receber pagamento" aria-label="Receber pagamento"><CreditCard size={17}/></button>}
+          {page==='sales' && r.status==='draft' && can('sales','create') && <button type="button" className="ap-icon-action" onClick={()=>{setOsInvoiceMode(false);setOsDueDate('');setOsInvoiceNumber('');setPaySale(r);setPayMethod('pix');setPayBrand('');setPayInstallments('1');setPayLocations({})}} title="Receber pagamento" aria-label="Receber pagamento"><CreditCard size={17}/></button>}
           {page==='sales' && r.status==='cancelled' && <span title="Venda cancelada" aria-label="Venda cancelada" style={{display:'inline-flex',alignItems:'center'}}><XCircle size={17}/></span>}
           {page==='sales' && r.status==='draft' && can('sales','edit') && <button type="button" className="ap-icon-action" onClick={()=>void cancelOsSale(r)} title="Cancelar venda pendente" aria-label="Cancelar venda pendente"><XCircle size={17}/></button>}
           {page === 'sales' && r.status !== 'draft' && r.status !== 'cancelled' && can('sales','view') && <button type="button" className="ap-icon-action" onClick={() => setWarrantySale(r)} title="Emitir termo de garantia" aria-label="Emitir termo de garantia"><ShieldCheck size={17}/></button>}
@@ -1314,13 +1383,13 @@ const { data: saved, error } = await q.select('*').single()
     </div>
 
     {celebrate && <div aria-hidden="true" className="ap-celebration">{Array.from({length:32},(_,i)=><span key={i} style={{left:`${(i*37)%100}%`,animationDelay:`${(i%7)*0.09}s`,background:['#6678ff','#a56cff','#35e1cc','#ffc857'][i%4]}} />)}</div>}
-    {paySale && <div className="modal-backdrop"><div className="modal" style={{maxWidth:650,padding:22}}><h2>Receber venda da OS</h2><p>Valor aprovado: <strong>{currency(number(paySale.amount))}</strong>. O caixa só será atualizado após a confirmação.</p>
-      <div className="form-grid"><label>Forma de pagamento<select className="select" value={payMethod} onChange={e=>{setPayMethod(e.target.value);setPayBrand('');setPayInstallments('1')}}><option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Débito</option><option value="credit">Crédito</option></select></label>
-      {['credit','debit'].includes(payMethod)&&<label>Bandeira<select className="select" value={payBrand} onChange={e=>setPayBrand(e.target.value)}><option value="">Selecione</option><option value="visa">Visa</option><option value="mastercard">Mastercard</option><option value="elo">Elo</option><option value="amex">Amex</option><option value="other">Outra</option></select></label>}
-      {payMethod==='credit'&&<label>Parcelas<select className="select" value={payInstallments} onChange={e=>setPayInstallments(e.target.value)}>{Array.from({length:18},(_,i)=>i+1).map(n=><option key={n} value={n}>{n}x · {cardRates[n]??'Taxa indisponível'}%</option>)}</select></label>}</div>
+    {paySale && <div className="modal-backdrop"><div className="modal" style={{maxWidth:650,padding:22}}><h2>Finalizar venda da OS</h2><p>Valor aprovado: <strong>{currency(number(paySale.amount))}</strong>. O caixa só será atualizado após a confirmação.</p>
+      <label style={{display:'block',marginTop:10}}>Condição<select className="select" value={osInvoiceMode?'term':'immediate'} onChange={e=>setOsInvoiceMode(e.target.value==='term')}><option value="immediate">Recebimento imediato</option><option value="term">Faturar a prazo</option></select></label>{osInvoiceMode&&<div className="form-grid"><label>Vencimento *<input type="date" min={today()} value={osDueDate} onChange={e=>setOsDueDate(e.target.value)}/></label><label>Número da NF<input value={osInvoiceNumber} onChange={e=>setOsInvoiceNumber(e.target.value)}/></label></div>}<div className="form-grid">{!osInvoiceMode&&<label>Forma de pagamento<select className="select" value={payMethod} onChange={e=>{setPayMethod(e.target.value);setPayBrand('');setPayInstallments('1')}}><option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Débito</option><option value="credit">Crédito</option></select></label>}
+      {!osInvoiceMode&&['credit','debit'].includes(payMethod)&&<label>Bandeira<select className="select" value={payBrand} onChange={e=>setPayBrand(e.target.value)}><option value="">Selecione</option><option value="visa">Visa</option><option value="mastercard">Mastercard</option><option value="elo">Elo</option><option value="amex">Amex</option><option value="other">Outra</option></select></label>}
+      {!osInvoiceMode&&payMethod==='credit'&&<label>Parcelas<select className="select" value={payInstallments} onChange={e=>setPayInstallments(e.target.value)}>{Array.from({length:18},(_,i)=>i+1).map(n=><option key={n} value={n}>{n}x · {cardRates[n]??'Taxa indisponível'}%</option>)}</select></label>}</div>
       {saleItemRows.filter(i=>i.sale_id===paySale.id&&i.item_type==='product').map((i,n)=><label key={n} style={{display:'block',marginTop:12}}>Estoque de origem — {data.products.find(p=>p.id===i.product_id)?.name||'Produto'}<select className="select" value={payLocations[String(i.product_id)]||''} onChange={e=>setPayLocations(old=>({...old,[String(i.product_id)]:e.target.value}))}><option value="">Selecione estoque</option>{stockLocations.filter(l=>stockBalances.some(b=>b.location_id===l.id&&b.product_id===i.product_id&&b.quantity>=i.quantity)).map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select></label>)}
-      <p style={{marginTop:15}}>Total com taxas: <strong>{currency(Math.round(number(paySale.amount)*(1+((payMethod==='credit'?Number(cardRates[Number(payInstallments)]||0):payMethod==='debit'?2.99:0)+(['elo','amex'].includes(payBrand)?1:0))/100)*100)/100)}</strong></p>
-      <div className="modal-actions"><button type="button" className="outline-btn" onClick={()=>setPaySale(null)}>Voltar</button><button type="button" className="primary-btn" disabled={saving||(['credit','debit'].includes(payMethod)&&!payBrand)} onClick={()=>void confirmOsPayment()}>{saving?'Processando…':'Confirmar pagamento'}</button></div></div></div>}
+      {!osInvoiceMode&&<p style={{marginTop:15}}>Total com taxas: <strong>{currency(Math.round(number(paySale.amount)*(1+((payMethod==='credit'?Number(cardRates[Number(payInstallments)]||0):payMethod==='debit'?2.99:0)+(['elo','amex'].includes(payBrand)?1:0))/100)*100)/100)}</strong></p>}
+      <div className="modal-actions"><button type="button" className="outline-btn" onClick={()=>setPaySale(null)}>Voltar</button><button type="button" className="primary-btn" disabled={saving||(!osInvoiceMode&&['credit','debit'].includes(payMethod)&&!payBrand)} onClick={()=>void (osInvoiceMode?confirmOsInvoice():confirmOsPayment())}>{saving?'Processando…':osInvoiceMode?'Faturar a prazo':'Confirmar pagamento'}</button></div></div></div>}
     {warrantyOrder && <WarrantyDialog organizationId={orgId||''} saleId={String(data.sales.find(x=>x.work_order_id===warrantyOrder.id)?.id||'')} orderId={warrantyOrder.id} customer={String(data.customers.find(c=>c.id===warrantyOrder.customer_id)?.name || 'Cliente não identificado')} vehicle={(()=>{const v=data.vehicles.find(v=>v.id===warrantyOrder.vehicle_id);return v ? [v.brand,v.model,v.plate].filter(Boolean).join(' · ') : 'Não informado'})()} technician={String(warrantyOrder.technician || '')} finishedAt={String(warrantyOrder.finished_at || '')} onClose={()=>setWarrantyOrder(null)}/>}
     {warrantySale && (() => {
       const order = data.work_orders.find(o => o.id === warrantySale.work_order_id)
@@ -1411,12 +1480,12 @@ const { data: saved, error } = await q.select('*').single()
               const already=saleItems.filter(i=>i.type==='product'&&i.id===pickId&&i.location_id===pickLocation).reduce((sum,i)=>sum+i.quantity,0)
               if(already+n>available){alert(`Estoque insuficiente: ${available-already} unidade(s) disponíveis.`);return}
             }
-            setSaleItems(old=>{const idx=old.findIndex(i=>i.type===pickType&&i.id===pickId&&i.location_id===(pickType==='product'?pickLocation:undefined));if(idx<0)return [...old,{type:pickType,id:pickId,quantity:n,...(pickType==='product'?{location_id:pickLocation}:{})}];return old.map((i,j)=>j===idx?{...i,quantity:i.quantity+n}:i)})
+            setSaleItems(old=>{const idx=old.findIndex(i=>i.type===pickType&&i.id===pickId&&i.location_id===(pickType==='product'?pickLocation:undefined));if(idx<0)return [...old,{type:pickType,id:pickId,quantity:n,price:Number((pickType==='product'?data.products:data.services).find(p=>p.id===pickId)?.price||0),...(pickType==='product'?{location_id:pickLocation}:{})}];return old.map((i,j)=>j===idx?{...i,quantity:i.quantity+n}:i)})
             setPickId('');setPickQty('1')
           }}>+ Adicionar item</button>
         </div>
-        {saleItems.map((item,i)=><div className="ap-sale-item" key={`${item.type}-${item.id}-${item.location_id||''}`}><span>{(item.type==='product'?data.products:data.services).find(p=>p.id===item.id)?.name||'Item'} · {item.quantity} × {currency(saleItemPrice({...item,quantity:1}))}</span><strong>{currency(saleItemPrice(item))}</strong><button type="button" className="icon-btn" onClick={()=>setSaleItems(old=>old.filter((_,j)=>j!==i))} aria-label="Remover item"><Trash2 size={15}/></button></div>)}
-        {saleItems.length>0&&<><div className="ap-sale-item-total"><strong>Subtotal: {currency(saleItemTotal)}</strong><label>Desconto (R$)<input type="number" min="0" max={saleItemTotal} step="0.01" value={form.discount||'0'} onChange={e=>setForm(old=>({...old,discount:e.target.value}))}/></label><strong>Total: {currency(Math.max(0,saleItemTotal-Number(form.discount||0)))}</strong></div><p>Preço e custo são conferidos novamente pelo servidor. Para cliente ou veículo novo, use Salvar e selecionar antes de concluir a venda.</p></>}
+        {saleItems.map((item,i)=><div className="ap-sale-item" key={`${item.type}-${item.id}-${item.location_id||''}`}><span>{(item.type==='product'?data.products:data.services).find(p=>p.id===item.id)?.name||'Item'} · {item.quantity} × <label style={{display:'inline-flex',alignItems:'center',gap:5}}>R$ <input aria-label="Preço unitário negociado" type="number" min="0" step="0.01" style={{width:100}} value={item.price} onChange={e=>setSaleItems(old=>old.map((v,j)=>j===i?{...v,price:Number(e.target.value)}:v))}/></label></span><strong>{currency(saleItemPrice(item))}</strong><button type="button" className="icon-btn" onClick={()=>setSaleItems(old=>old.filter((_,j)=>j!==i))} aria-label="Remover item"><Trash2 size={15}/></button></div>)}
+        {saleItems.length>0&&<><div className="ap-sale-item-total"><strong>Subtotal: {currency(saleItemTotal)}</strong><label>Desconto (R$)<input type="number" min="0" max={saleItemTotal} step="0.01" value={form.discount||'0'} onChange={e=>setForm(old=>({...old,discount:e.target.value}))}/></label><strong>Total: {currency(Math.max(0,saleItemTotal-Number(form.discount||0)))}</strong></div><p>Preço negociado será registrado na venda; custo e estoque são conferidos pelo servidor. Para cliente ou veículo novo, use Salvar e selecionar antes de concluir a venda.</p></>}
         <small>Sem itens selecionados, a venda avulsa atual continua disponível.</small>
       </section>}
       {page === 'quotes' && <section className="ap-sale-items"><h3>Itens do orçamento</h3>
@@ -1425,13 +1494,13 @@ const { data: saved, error } = await q.select('*').single()
         <label>Quantidade<input type="number" min="0.01" step="any" value={form.quantity||'1'} onChange={e=>setForm(old=>({...old,quantity:e.target.value}))}/></label>
         <label>Preço unitário<input type="number" min="0" step="0.01" value={form.unit_price||'0'} onChange={e=>setForm(old=>({...old,unit_price:e.target.value}))}/></label></div>
         <button type="button" className="outline-btn" onClick={()=>{const id=form.item_id;const quantity=Number(form.quantity||1);const price=Number(form.unit_price||0);if(!id||!Number.isFinite(quantity)||quantity<=0||!Number.isFinite(price)||price<0){alert('Selecione item, quantidade e preço válidos.');return}setQuoteItems(old=>[...old,{type:form.item_type==='product'?'product':'service',id,quantity,price}]);setForm(old=>({...old,item_id:'',quantity:'1',unit_price:''}))}}>+ Adicionar item</button>
-        {quoteItems.map((i,n)=><div className="ap-sale-item" key={n}><span>{(i.type==='product'?data.products:data.services).find(x=>x.id===i.id)?.name||'Item'} · {i.quantity} × {currency(i.price)}</span><strong>{currency(i.quantity*i.price)}</strong><button type="button" className="icon-btn" onClick={()=>setQuoteItems(old=>old.filter((_,j)=>j!==n))}><Trash2 size={15}/></button></div>)}
+        {quoteItems.map((i,n)=><div className="ap-sale-item" key={n}><span>{(i.type==='product'?data.products:data.services).find(x=>x.id===i.id)?.name||'Item'} · {i.quantity} × <label style={{display:'inline-flex',alignItems:'center',gap:5}}>R$ <input aria-label="Preço unitário do orçamento" type="number" min="0" step="0.01" style={{width:100}} value={i.price} onChange={e=>setQuoteItems(old=>old.map((v,j)=>j===n?{...v,price:Number(e.target.value)}:v))}/></label></span><strong>{currency(i.quantity*i.price)}</strong><button type="button" className="icon-btn" onClick={()=>setQuoteItems(old=>old.filter((_,j)=>j!==n))}><Trash2 size={15}/></button></div>)}
         <div className="ap-sale-item-total"><strong>Total: {currency(Math.max(0,quoteItems.reduce((n,i)=>n+i.quantity*i.price,0)-Number(form.discount||0)))}</strong></div>
       </section>}
       {page === 'products' && editing && <p className="ap-stock-hint">A quantidade é controlada exclusivamente em Controle de estoque. Alterações aqui não modificam o saldo.</p>}
       {page === 'expenses' && <div className="ap-expense-options"><label>Situação da despesa<select className="select" value={form.status || 'paid'} onChange={e=>setForm(old=>({...old,status:e.target.value}))}><option value="paid">Paga — movimentar o caixa</option><option value="pending">Pendente — não movimentar o caixa</option></select></label>{form.status !== 'pending' && <label>Forma de pagamento<select className="select" value={form.payment_method || 'pix'} onChange={e=>setForm(old=>({...old,payment_method:e.target.value}))}><option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Débito</option><option value="credit">Crédito</option><option value="transfer">Transferência</option><option value="other">Outro</option></select></label>}</div>}
-      {page === 'sales' && ['credit','debit'].includes(form.method || '') && <div className="form-grid"><label>Bandeira do cartão <span className="required">*</span><select className="select" value={form.card_brand || ''} onChange={e=>setForm(old=>({...old,card_brand:e.target.value}))} required><option value="">Selecione a bandeira</option><option value="visa">Visa</option><option value="mastercard">Mastercard</option><option value="elo">Elo (+1 p.p.)</option><option value="amex">Amex (+1 p.p.)</option><option value="other">Outra</option></select></label></div>}
-      {page === 'sales' && ['credit','debit'].includes(form.method || '') && (()=>{const base=saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount);const rate=(form.method==='debit'?2.99:(cardRates[Number(form.installments||1)]??0)) + (['elo','amex'].includes(form.card_brand||'')?1:0);const fee=Math.round(base*rate)/100;return <p style={{margin:'10px 0',opacity:.9}}>Taxa aplicada: <strong>{rate.toFixed(2)}%</strong> · Acréscimo: <strong>{currency(fee)}</strong> · Total previsto: <strong>{currency(Math.round((base+fee)*100)/100)}</strong></p>})()}
+      {page === 'sales' && form.payment_condition!=='term' && ['credit','debit'].includes(form.method || '') && <div className="form-grid"><label>Bandeira do cartão <span className="required">*</span><select className="select" value={form.card_brand || ''} onChange={e=>setForm(old=>({...old,card_brand:e.target.value}))} required><option value="">Selecione a bandeira</option><option value="visa">Visa</option><option value="mastercard">Mastercard</option><option value="elo">Elo (+1 p.p.)</option><option value="amex">Amex (+1 p.p.)</option><option value="other">Outra</option></select></label></div>}
+      {page === 'sales' && form.payment_condition!=='term' && ['credit','debit'].includes(form.method || '') && (()=>{const base=saleItems.length?Math.max(0,saleItemTotal-number(form.discount)):number(form.amount);const rate=(form.method==='debit'?2.99:(cardRates[Number(form.installments||1)]??0)) + (['elo','amex'].includes(form.card_brand||'')?1:0);const fee=Math.round(base*rate)/100;return <p style={{margin:'10px 0',opacity:.9}}>Taxa aplicada: <strong>{rate.toFixed(2)}%</strong> · Acréscimo: <strong>{currency(fee)}</strong> · Total previsto: <strong>{currency(Math.round((base+fee)*100)/100)}</strong></p>})()}
       {['quotes','work_orders'].includes(page) && <div className="quick-sale-relations">
         <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
           <button type="button" className="outline-btn" disabled={!can('customers','create') || quickSaving} onClick={()=>{setQuickCustomer(v=>!v);setQuickVehicle(false)}}>+ Novo cliente</button>
@@ -1440,7 +1509,8 @@ const { data: saved, error } = await q.select('*').single()
         {quickCustomer && quickCustomerFields}
         {quickVehicle && quickVehicleFields}
       </div>}
-      <div className="form-grid">{config[page].fields.filter(f => !(page === 'products' && editing && f.key === 'quantity') && !(page === 'quotes' && ['item_type','item_id','quantity','unit_price'].includes(f.key)) && !(page === 'sales' && (f.key === 'customer_id' || f.key === 'vehicle_id' || (saleItems.length>0 && ['description','amount','cost'].includes(f.key)) || (f.key === 'installments' && form.method !== 'credit')))).map(f => <label key={f.key}>{f.label}{f.required && <span className="required"> *</span>}{(['vehicles','quotes','work_orders'].includes(page) && f.key === 'customer_id') ? <select className="select" value={form.customer_id || ''} onChange={e => setForm(old => ({ ...old, customer_id: e.target.value, vehicle_id: '', quote_id: '' }))}><option value="">{page === 'vehicles' ? 'Sem proprietário' : 'Selecione o cliente'}</option>{data.customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select> : (['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id') ? <select className="select" value={form.vehicle_id || ''} onChange={e => setForm(old => ({ ...old, vehicle_id: e.target.value }))}><option value="">Sem veículo</option>{data.vehicles.filter(v => !v.customer_id || v.customer_id === form.customer_id).map(v => <option key={v.id} value={v.id}>{v.plate || v.model || v.id.slice(0,8)}</option>)}</select> : (page === 'work_orders' && f.key === 'quote_id') ? <select className="select" value={form.quote_id || ''} onChange={e => setForm(old => ({ ...old, quote_id: e.target.value }))}><option value="">Sem orçamento</option>{data.quotes.filter(q => q.status === 'approved' && q.customer_id === form.customer_id).map(q => <option key={q.id} value={q.id}>Orçamento {q.id.slice(0,8)} · {currency(number(q.amount))}</option>)}</select> : (page === 'quotes' && f.key === 'item_type') ? <select className="select" value={form.item_type || 'service'} onChange={e => setForm(old => ({ ...old, item_type: e.target.value, item_id: '', unit_price: '' }))}><option value="service">Serviço</option><option value="product">Produto</option></select> : (page === 'quotes' && f.key === 'item_id') ? <select className="select" value={form.item_id || ''} onChange={e => { const item = (form.item_type === 'product' ? data.products : data.services).find(i => i.id === e.target.value); setForm(old => ({ ...old, item_id: e.target.value, unit_price: item ? String(item.price || 0) : '' })) }}><option value="">Sem item</option>{(form.item_type === 'product' ? data.products : data.services).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select> : (['quotes','work_orders'].includes(page) && f.key === 'status') ? <select className="select" value={form.status || (page === 'quotes' ? 'draft' : 'waiting')} onChange={e => setForm(old => ({ ...old, status: e.target.value }))}>{(page === 'quotes' ? [['draft','Rascunho'],['sent','Aguardando aprovação do cliente'],['rejected','Recusado']] : [['waiting','Aguardando'],['in_progress','Em andamento'],['finished','Concluída'],['delivered','Entregue'],['cancelled','Cancelada']]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select> : (page === 'cash_entries' && f.key === 'kind') ? <select className="select" value={form.kind || 'income'} onChange={e => setForm(old => ({...old,kind:e.target.value}))}><option value="income">Entrada — dinheiro recebido</option><option value="expense">Saída — dinheiro pago</option></select> : (page === 'sales' && f.key === 'method') ? <select className="select" value={['pix','cash','debit','credit'].includes(form.method || '') ? form.method : form.method ? 'legacy' : ''} onChange={e => setForm(old => ({ ...old, method: e.target.value, installments: '1', card_brand: '' }))} required><option value="" disabled>Selecione a forma de pagamento</option>{form.method && !['pix','cash','debit','credit'].includes(form.method) && <option value="legacy" disabled>Anterior: {form.method} — selecione uma opção</option>}<option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select> : (page === 'sales' && f.key === 'installments') ? <><select className="select" value={form.installments || '1'} onChange={e => setForm(old => ({ ...old, installments: e.target.value }))}>{Array.from({ length: 18 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}x — {cardRates[n]===undefined?'taxa não configurada':cardRates[n]+'%'}</option>)}</select><small style={{ display: 'block', marginTop: 6, opacity: .8 }}>Taxa base: {cardRates[Number(form.installments||1)] ?? 'não configurada'}% · Elo/Amex: +1 p.p.</small></> : <input type={f.type || 'text'} step={f.type === 'number' ? 'any' : undefined} min={f.type === 'number' ? '0' : undefined} value={form[f.key] || ''} onChange={e => setForm(old => ({ ...old, [f.key]: e.target.value }))} required={f.required}/>}</label>)}</div><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setModal(false)}>Cancelar</button><button type="submit" className="primary-btn" disabled={saving}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Cadastrar'}</button></div></form></div></div>}
+      {page==='sales'&&!editing&&<section className="ap-sale-items"><h3>Condição de pagamento</h3><div className="form-grid"><label>Tipo de venda<select className="select" value={form.payment_condition||'immediate'} onChange={e=>setForm(old=>({...old,payment_condition:e.target.value}))}><option value="immediate">Recebimento imediato</option><option value="term">Venda a prazo / faturada</option></select></label>{form.payment_condition==='term'&&<><label>Vencimento *<input type="date" min={today()} required value={form.due_date||''} onChange={e=>setForm(old=>({...old,due_date:e.target.value}))}/></label><label>Número da NF<input value={form.invoice_number||''} onChange={e=>setForm(old=>({...old,invoice_number:e.target.value}))}/></label></>}</div>{form.payment_condition==='term'&&<p>Venda a prazo: exige cliente cadastrado e itens. O estoque será baixado uma vez; o caixa somente após receber.</p>}</section>}
+      <div className="form-grid">{config[page].fields.filter(f => !(page === 'products' && editing && f.key === 'quantity') && !(page === 'quotes' && ['item_type','item_id','quantity','unit_price'].includes(f.key)) && !(page === 'sales' && (f.key === 'customer_id' || f.key === 'vehicle_id' || (saleItems.length>0 && ['description','amount','cost'].includes(f.key)) || (f.key === 'installments' && (form.method !== 'credit'||form.payment_condition==='term')) || (f.key==='method'&&form.payment_condition==='term')))).map(f => <label key={f.key}>{f.label}{f.required && <span className="required"> *</span>}{(['vehicles','quotes','work_orders'].includes(page) && f.key === 'customer_id') ? <select className="select" value={form.customer_id || ''} onChange={e => setForm(old => ({ ...old, customer_id: e.target.value, vehicle_id: '', quote_id: '' }))}><option value="">{page === 'vehicles' ? 'Sem proprietário' : 'Selecione o cliente'}</option>{data.customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select> : (['quotes','work_orders','sales'].includes(page) && f.key === 'vehicle_id') ? <select className="select" value={form.vehicle_id || ''} onChange={e => setForm(old => ({ ...old, vehicle_id: e.target.value }))}><option value="">Sem veículo</option>{data.vehicles.filter(v => !v.customer_id || v.customer_id === form.customer_id).map(v => <option key={v.id} value={v.id}>{v.plate || v.model || v.id.slice(0,8)}</option>)}</select> : (page === 'work_orders' && f.key === 'quote_id') ? <select className="select" value={form.quote_id || ''} onChange={e => setForm(old => ({ ...old, quote_id: e.target.value }))}><option value="">Sem orçamento</option>{data.quotes.filter(q => q.status === 'approved' && q.customer_id === form.customer_id).map(q => <option key={q.id} value={q.id}>Orçamento {q.id.slice(0,8)} · {currency(number(q.amount))}</option>)}</select> : (page === 'quotes' && f.key === 'item_type') ? <select className="select" value={form.item_type || 'service'} onChange={e => setForm(old => ({ ...old, item_type: e.target.value, item_id: '', unit_price: '' }))}><option value="service">Serviço</option><option value="product">Produto</option></select> : (page === 'quotes' && f.key === 'item_id') ? <select className="select" value={form.item_id || ''} onChange={e => { const item = (form.item_type === 'product' ? data.products : data.services).find(i => i.id === e.target.value); setForm(old => ({ ...old, item_id: e.target.value, unit_price: item ? String(item.price || 0) : '' })) }}><option value="">Sem item</option>{(form.item_type === 'product' ? data.products : data.services).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select> : (['quotes','work_orders'].includes(page) && f.key === 'status') ? <select className="select" value={form.status || (page === 'quotes' ? 'draft' : 'waiting')} onChange={e => setForm(old => ({ ...old, status: e.target.value }))}>{(page === 'quotes' ? [['draft','Rascunho'],['sent','Aguardando aprovação do cliente'],['rejected','Recusado']] : [['waiting','Aguardando'],['in_progress','Em andamento'],['finished','Concluída'],['delivered','Entregue'],['cancelled','Cancelada']]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select> : (page === 'cash_entries' && f.key === 'kind') ? <select className="select" value={form.kind || 'income'} onChange={e => setForm(old => ({...old,kind:e.target.value}))}><option value="income">Entrada — dinheiro recebido</option><option value="expense">Saída — dinheiro pago</option></select> : (page === 'sales' && f.key === 'method') ? <select className="select" value={['pix','cash','debit','credit'].includes(form.method || '') ? form.method : form.method ? 'legacy' : ''} onChange={e => setForm(old => ({ ...old, method: e.target.value, installments: '1', card_brand: '' }))} required><option value="" disabled>Selecione a forma de pagamento</option>{form.method && !['pix','cash','debit','credit'].includes(form.method) && <option value="legacy" disabled>Anterior: {form.method} — selecione uma opção</option>}<option value="pix">PIX</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select> : (page === 'sales' && f.key === 'installments') ? <><select className="select" value={form.installments || '1'} onChange={e => setForm(old => ({ ...old, installments: e.target.value }))}>{Array.from({ length: 18 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}x — {cardRates[n]===undefined?'taxa não configurada':cardRates[n]+'%'}</option>)}</select><small style={{ display: 'block', marginTop: 6, opacity: .8 }}>Taxa base: {cardRates[Number(form.installments||1)] ?? 'não configurada'}% · Elo/Amex: +1 p.p.</small></> : <input type={f.type || 'text'} step={f.type === 'number' ? 'any' : undefined} min={f.type === 'number' ? '0' : undefined} value={form[f.key] || ''} onChange={e => setForm(old => ({ ...old, [f.key]: e.target.value }))} required={f.required}/>}</label>)}</div><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setModal(false)}>Cancelar</button><button type="submit" className="primary-btn" disabled={saving}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Cadastrar'}</button></div></form></div></div>}
 
   </div>
 
